@@ -6,6 +6,7 @@ use std::{
 };
 
 #[derive(Debug)]
+#[allow(unused)]
 pub enum Error {
     /// An error occurring while running a command
     Command(io::Error),
