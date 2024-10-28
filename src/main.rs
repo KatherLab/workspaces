@@ -20,20 +20,20 @@ mod cli;
 mod config;
 mod zfs;
 
-mod exit_codes {
+enum ExitCodes {
     /// The user tried executing an action they have no rights to do,
     /// i.e. expiring another user's workspace
-    pub const INSUFFICIENT_PRIVILEGES: i32 = 1;
+    InsufficientPrivileges = 1,
     /// The user tried creating / extending a workspace on a disabled filesystem
-    pub const FS_DISABLED: i32 = 2;
+    FsDisabled,
     /// The user tried creating / extending a workspace with too long a duration
-    pub const TOO_HIGH_DURATION: i32 = 3;
+    TooHighDuration,
     /// The workspace specified by a user does not exist
-    pub const UNKNOWN_WORKSPACE: i32 = 4;
+    UnknownWorkspace,
     /// The user tried to create a workspace that already exists
-    pub const WORKSPACE_EXISTS: i32 = 5;
+    WorkspaceExists,
     /// No filesystem given and no default specified in configuration file
-    pub const NO_FILESYSTEM_SPECIFIED: i32 = 6;
+    NoFilesystemSpecified,
 }
 
 /// Creates a new workspace
@@ -47,18 +47,18 @@ fn create(
 ) {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
-        process::exit(exit_codes::INSUFFICIENT_PRIVILEGES);
+        process::exit(ExitCodes::InsufficientPrivileges as i32);
     }
     if filesystem.disabled && get_current_uid() != 0 {
         eprintln!("Filesystem is disabled. Please try another filesystem.");
-        process::exit(exit_codes::FS_DISABLED);
+        process::exit(ExitCodes::FsDisabled as i32);
     }
     if duration > &filesystem.max_duration && get_current_uid() != 0 {
         eprintln!(
             "Duration can be at most {} days",
             filesystem.max_duration.num_days()
         );
-        process::exit(exit_codes::TOO_HIGH_DURATION);
+        process::exit(ExitCodes::TooHighDuration as i32);
     }
 
     let transaction = conn.transaction().unwrap();
@@ -78,7 +78,7 @@ fn create(
             eprintln!(
                 "This workspace already exists. You can extend it using `workspaces extend`."
             );
-            process::exit(exit_codes::WORKSPACE_EXISTS);
+            process::exit(ExitCodes::WorkspaceExists as i32);
         }
         Err(_) => unreachable!(),
     };
@@ -118,11 +118,11 @@ fn rename(
 ) {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
-        process::exit(exit_codes::INSUFFICIENT_PRIVILEGES);
+        process::exit(ExitCodes::InsufficientPrivileges as i32);
     }
     if filesystem.disabled && get_current_uid() != 0 {
         eprintln!("Filesystem is disabled. Please try another filesystem.");
-        process::exit(exit_codes::FS_DISABLED);
+        process::exit(ExitCodes::FsDisabled as i32);
     }
 
     let transaction = conn.transaction().unwrap();
@@ -143,7 +143,7 @@ fn rename(
             _,
         )) => {
             eprintln!("The target workspace already exists");
-            process::exit(exit_codes::WORKSPACE_EXISTS);
+            process::exit(ExitCodes::WorkspaceExists as i32);
         }
         Err(_) => unreachable!(),
     }
@@ -303,18 +303,18 @@ fn extend(
 ) {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
-        process::exit(exit_codes::INSUFFICIENT_PRIVILEGES);
+        process::exit(ExitCodes::InsufficientPrivileges as i32);
     }
     if filesystem.disabled && get_current_uid() != 0 {
         eprintln!("Filesystem is disabled. Please recreate workspace on another filesystem.");
-        process::exit(exit_codes::FS_DISABLED);
+        process::exit(ExitCodes::FsDisabled as i32);
     }
     if duration > &filesystem.max_duration && get_current_uid() != 0 {
         eprintln!(
             "Duration can be at most {} days",
             filesystem.max_duration.num_days()
         );
-        process::exit(exit_codes::TOO_HIGH_DURATION);
+        process::exit(ExitCodes::TooHighDuration as i32);
     }
 
     let rows_updated = conn
@@ -333,7 +333,7 @@ fn extend(
                 "Could not find a matching filesystem={}, user={}, name={}",
                 filesystem_name, user, name
             );
-            process::exit(exit_codes::UNKNOWN_WORKSPACE);
+            process::exit(ExitCodes::UnknownWorkspace as i32);
         }
         1 => {}
         _ => unreachable!(),
@@ -357,7 +357,7 @@ fn expire(
 ) {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
-        process::exit(exit_codes::INSUFFICIENT_PRIVILEGES);
+        process::exit(ExitCodes::InsufficientPrivileges as i32);
     }
 
     let expiration_time = if delete_on_next_clean {
@@ -383,7 +383,7 @@ fn expire(
                 "Could not find a matching filesystem={}, user={}, name={}",
                 filesystem_name, user, name
             );
-            process::exit(exit_codes::UNKNOWN_WORKSPACE);
+            process::exit(ExitCodes::UnknownWorkspace as i32);
         }
         1 => {}
         _ => unreachable!(),
@@ -689,7 +689,7 @@ fn filesystem_or_default_or_exit(
         filesystems.keys().next().unwrap().clone()
     } else {
         eprintln!("Please specify a filesystem with `-f <FILESYSTEM>`");
-        process::exit(exit_codes::NO_FILESYSTEM_SPECIFIED);
+        process::exit(ExitCodes::NoFilesystemSpecified as i32);
     };
 
     if filesystems.contains_key(&filesystem_name) {
@@ -700,6 +700,6 @@ fn filesystem_or_default_or_exit(
             eprint!(" {}", name);
         }
         eprintln!();
-        process::exit(exit_codes::UNKNOWN_WORKSPACE);
+        process::exit(ExitCodes::UnknownWorkspace as i32);
     }
 }
