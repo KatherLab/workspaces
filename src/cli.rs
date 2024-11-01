@@ -128,11 +128,14 @@ pub enum Command {
         #[arg(short, long, value_name = "COLUMN")]
         output: Option<Vec<FilesystemsColumns>>,
     },
-    /// Clean up workspaces which not been extended in a while
+    /// Do maintainance work
     ///
     /// This will delete all workspaces marked as `deleted soon` in `workspaces list`,
     /// including other users' workspaces.
-    Clean,
+    /// Expired workspaces will be made read-only.
+    /// Snapshots will be created.
+    /// Notification emails may be sent out.
+    Maintain,
 }
 
 #[derive(Clone, Debug, ValueEnum)]

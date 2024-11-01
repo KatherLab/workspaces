@@ -1,4 +1,6 @@
 use chrono::Duration;
+use lettre::message::Mailbox;
+use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,11 +10,15 @@ pub const CONFIG_PATH: &str = "/etc/workspaces/workspaces.toml";
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    /// Default filesystem to use in CLI
-    pub default_filesystem: Option<String>,
     /// Workspaces database location
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
+
+    #[serde(default)]
+    pub smtp: Option<SmtpConfig>,
+
+    /// Default filesystem to use in CLI
+    pub default_filesystem: Option<String>,
     /// Workspace filesystem definitions
     #[serde(default)]
     pub filesystems: HashMap<String, Filesystem>,
@@ -45,15 +51,24 @@ fn default_db_path() -> PathBuf {
 pub struct Filesystem {
     /// ZFS filesystem / volume which will act as the root for the datasets
     pub root: String,
+
     /// Maximum number of days a workspace may exist
     #[serde(deserialize_with = "from_days")]
     pub max_duration: Duration,
     /// Days after which an expired dataset will be removed
     #[serde(deserialize_with = "from_days")]
     pub expired_retention: Duration,
+
+    /// Days relative to the expiration time the user will be notified.
+    /// Negative durations will lead to messages being sent after expiry,
+    /// but before deletion.
+    #[serde(default = "Vec::new", deserialize_with = "from_days_list")]
+    pub expiry_notifications_on_days: Vec<Duration>,
+
     /// Snapshot
     #[serde(default)]
     pub snapshot: bool,
+
     /// Whether datasets can be created / extended
     #[serde(default)]
     pub disabled: bool,
@@ -65,4 +80,36 @@ where
 {
     let days: i64 = Deserialize::deserialize(deserializer)?;
     Ok(Duration::days(days))
+}
+
+fn from_days_list<'de, D>(deserializer: D) -> Result<Vec<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut days: Vec<i64> = Deserialize::deserialize(deserializer)?;
+    days.sort();
+    Ok(days.iter().map(|days| Duration::days(*days)).collect())
+}
+
+#[derive(Deserialize, Debug)]
+pub struct SmtpConfig {
+    pub relay: String,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserConfig {
+    #[serde(deserialize_with = "deserialize_mailbox")]
+    pub email: Mailbox,
+}
+
+fn deserialize_mailbox<'de, D>(deserializer: D) -> Result<Mailbox, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let email_str: String = Deserialize::deserialize(deserializer)?;
+    email_str.parse().map_err(|_| {
+        de::Error::invalid_value(Unexpected::Str(&email_str), &"a valid email address string")
+    })
 }

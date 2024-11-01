@@ -3,4 +3,4 @@ Description="Clean up expired workspaces"
 
 [Service]
 type=oneshot
-ExecStart=/usr/local/bin/workspaces clean
+ExecStart=/usr/local/bin/workspaces maintain

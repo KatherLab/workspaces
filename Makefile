@@ -12,10 +12,9 @@ install: $(BIN)
 	# copy config
 	mkdir -p /etc/workspaces
 	cp workspaces.toml /etc/workspaces/workspaces.example.toml
-	test -e /etc/workspaces/workspaces.toml || cp workspaces.toml /etc/workspaces/
+	test -e /etc/workspaces/workspaces.toml || install -m 0600 workspaces.toml /etc/workspaces/
 	# make database dir
 	mkdir -p /usr/local/lib/workspaces
 	# install systemd service / timer
-	cp clean-workspaces.service /etc/systemd/system/
-	cp clean-workspaces.timer /etc/systemd/system/
-	systemctl daemon-reload
+	cp maintain-workspaces.service /etc/systemd/system/
+	cp maintain-workspaces.timer /etc/systemd/system/
