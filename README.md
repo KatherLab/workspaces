@@ -21,7 +21,7 @@ must have already set up a ZFS zpool.
 To activate automatic deletion of old workspaces, enable the corresponding
 systemd timer:
 ```console
-$ sudo systemctl enable --now clean-workspaces.timer
+$ sudo systemctl enable --now maintain-workspaces.timer
 ```
 
 ## User Tutorial
@@ -118,13 +118,13 @@ deletion date, you can extend its expiry date using the `extend` command.
 
 Usually, your system administrator will have set up the garbage collector to
 automatically clean up workspaces that are flagged for deletion once in a while.
-However, you can also manually run the garbage collector using the clean
+However, you can also run the garbage collector manually using the `maintain`
 command:
 ```console
 $ workspaces list
 NAME    USER        FS    EXPIRY        SIZE  MOUNTPOINT
 testws  mvantreeck  bulk  deleted soon   58G  /mnt/bulk/mvantreeck/testws
-$ workspaces clean
+$ workspaces maintain
 NAME  USER  FS  EXPIRY  SIZE  MOUNTPOINT
 [ no workspaces ]
 ```
