@@ -2,7 +2,8 @@
 
 BIN = target/release/workspaces
 
-$(BIN): src/main.rs src/cli.rs src/config.rs src/zfs.rs
+$(BIN): src/extend.rs src/maintain.rs src/config.rs src/main.rs src/create.rs src/db_schema.rs \
+		src/rename.rs src/expire.rs src/cli.rs src/zfs.rs src/filesystems.rs src/list.rs
 	cargo build --release
 
 install: $(BIN)
