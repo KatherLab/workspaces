@@ -58,6 +58,8 @@ fn main() {
 
     // Make sure database schema is current
     let mut conn = Connection::open(config.db_path).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+
     let db_version: usize = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
