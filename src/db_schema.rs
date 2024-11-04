@@ -8,12 +8,12 @@ pub const UPDATE_DB: &[fn(&mut Connection)] = &[
         let transaction = conn.transaction().unwrap();
         transaction
             .execute(
-                "CREATE TABLE workspaces (
-                    filesystem      TEXT     NOT NULL,
-                    user            TEXT     NOT NULL,
-                    name            TEXT     NOT NULL,
-                    expiration_time DATETIME NOT NULL,
-                    UNIQUE(filesystem, user, name)
+                "CREATE TABLE workspaces ( \
+                    filesystem      TEXT     NOT NULL, \
+                    user            TEXT     NOT NULL, \
+                    name            TEXT     NOT NULL, \
+                    expiration_time DATETIME NOT NULL, \
+                    UNIQUE(filesystem, user, name) \
                 )",
                 (),
             )
@@ -29,13 +29,13 @@ pub const UPDATE_DB: &[fn(&mut Connection)] = &[
             .unwrap();
         transaction
             .execute(
-                "CREATE TABLE workspaces(
-                    id              INTEGER  NOT NULL PRIMARY KEY,
-                    filesystem      TEXT     NOT NULL,
-                    user            TEXT     NOT NULL,
-                    name            TEXT     NOT NULL,
-                    expiration_time DATETIME NOT NULL,
-                    UNIQUE(filesystem, user, name)
+                "CREATE TABLE workspaces( \
+                    id              INTEGER  NOT NULL PRIMARY KEY, \
+                    filesystem      TEXT     NOT NULL, \
+                    user            TEXT     NOT NULL, \
+                    name            TEXT     NOT NULL, \
+                    expiration_time DATETIME NOT NULL, \
+                    UNIQUE(filesystem, user, name) \
                 )",
                 (),
             )
@@ -43,7 +43,7 @@ pub const UPDATE_DB: &[fn(&mut Connection)] = &[
 
         transaction
             .execute(
-                "INSERT INTO workspaces(id, filesystem, user, name, expiration_time)
+                "INSERT INTO workspaces(id, filesystem, user, name, expiration_time) \
                     SELECT rowid, filesystem, user, name, expiration_time FROM workspaces_old",
                 (),
             )
@@ -57,10 +57,10 @@ pub const UPDATE_DB: &[fn(&mut Connection)] = &[
         transaction.pragma_update(None, "foreign_keys", 1).unwrap();
         transaction
             .execute(
-                "CREATE TABLE notifications(
-                    workspace_id INTEGER  NOT NULL,
-                    timestamp    DATETIME NOT NULL,
-                    FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+                "CREATE TABLE notifications( \
+                    workspace_id INTEGER  NOT NULL, \
+                    timestamp    DATETIME NOT NULL, \
+                    FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE \
                 )",
                 (),
             )
