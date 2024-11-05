@@ -33,27 +33,39 @@ pub fn create(
         process::exit(ExitCodes::TooHighDuration as i32);
     }
 
-    let transaction = conn.transaction().unwrap();
-    match transaction.execute(
-        "INSERT INTO workspaces (filesystem, user, name, expiration_time)
-            VALUES (?1, ?2, ?3, ?4)",
-        (filesystem_name, user, name, Utc::now() + *duration),
-    ) {
-        Ok(_) => {}
-        Err(rusqlite::Error::SqliteFailure(
-            libsqlite3_sys::Error {
-                code: libsqlite3_sys::ErrorCode::ConstraintViolation,
-                ..
-            },
-            _,
-        )) => {
-            eprintln!(
-                "This workspace already exists. You can extend it using `workspaces extend`."
-            );
-            process::exit(ExitCodes::WorkspaceExists as i32);
+    conn.transaction().inspect(
+        |transaction| {
+            match transaction.execute(
+                "INSERT INTO workspaces(filesystem, user, name, expiration_time) \
+                    VALUES(?1, ?2, ?3, ?4)",
+                (filesystem_name, user, name, Utc::now() + *duration),
+            ) {
+                Ok(_) => {}
+                Err(rusqlite::Error::SqliteFailure(
+                    libsqlite3_sys::Error {
+                        code: libsqlite3_sys::ErrorCode::ConstraintViolation,
+                        ..
+                    },
+                    _,
+                )) => {
+                    eprintln!(
+                        "This workspace already exists. You can extend it using `workspaces extend`."
+                    );
+                    process::exit(ExitCodes::WorkspaceExists as i32);
+                }
+                Err(_) => unreachable!(),
+            };
+
+            // Act like there was a notification sent just now
+            // so the user doesn't immediately get spammed with them
+            transaction.execute(
+                "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
+                (transaction.last_insert_rowid(), Utc::now()),
+            ).unwrap();
         }
-        Err(_) => unreachable!(),
-    };
+    ).unwrap()
+    .commit()
+    .unwrap();
 
     let volume = to_volume_string(&filesystem.root, user, name);
 
@@ -70,7 +82,6 @@ pub fn create(
         .status()
         .unwrap();
     assert!(status.success(), "failed to change owner on dataset");
-    transaction.commit().unwrap();
 
     println!("Created workspace at {}", mountpoint);
 }

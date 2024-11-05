@@ -2,11 +2,11 @@ use clap::Parser;
 use create::create;
 use db_schema::{NEWEST_DB_VERSION, UPDATE_DB};
 use expire::expire;
+use extend::extend;
 use filesystems::filesystems;
 use list::list;
 use maintain::maintain;
 use rename::rename;
-use extend::extend;
 use rusqlite::Connection;
 use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, process};
 
@@ -15,12 +15,12 @@ mod config;
 mod create;
 mod db_schema;
 mod expire;
+mod extend;
 mod filesystems;
 mod list;
 mod maintain;
 mod rename;
 mod zfs;
-mod extend;
 
 enum ExitCodes {
     /// The user tried executing an action they have no rights to do,
@@ -134,7 +134,7 @@ fn main() {
                 &config.default_filesystem,
             );
             extend(
-                &conn,
+                &mut conn,
                 &filesystem_name,
                 &config.filesystems[&filesystem_name],
                 &user,
@@ -154,7 +154,7 @@ fn main() {
                 &config.default_filesystem,
             );
             expire(
-                &conn,
+                &mut conn,
                 &filesystem_name,
                 &config.filesystems[&filesystem_name],
                 &user,
