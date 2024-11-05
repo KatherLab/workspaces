@@ -20,7 +20,7 @@ pub fn expire(
     }
 
     let expiration_time = if delete_on_next_clean {
-        // set the expiration time sufficiently far in the past
+        // Set the expiration time sufficiently far in the past
         // for it to get cleaned up soon
         Utc::now() - filesystem.expired_retention
     } else {
@@ -29,34 +29,43 @@ pub fn expire(
 
     conn.transaction()
         .inspect(|transaction| {
-            let rows_updated = transaction
-                .execute(
-                    "UPDATE workspaces \
-                    SET expiration_time = MIN(expiration_time, ?1) \
-                    WHERE filesystem = ?2 \
-                        AND user = ?3 \
-                        AND name = ?4",
-                    (expiration_time, filesystem_name, user, name),
+            // Get workspace id
+            let workspace_id: i64 = match transaction
+                .prepare(
+                    "SELECT id FROM workspaces \
+                        WHERE filesystem = ?1 \
+                            AND user = ?2 \
+                            AND name = ?3",
                 )
-                .unwrap();
-            match rows_updated {
-                0 => {
+                .unwrap()
+                .query_row((filesystem_name, user, name), |row| row.get(0))
+            {
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
                     eprintln!(
                         "Could not find a matching filesystem={}, user={}, name={}",
                         filesystem_name, user, name
                     );
                     process::exit(ExitCodes::UnknownWorkspace as i32);
                 }
-                1 => {}
-                _ => unreachable!(),
-            };
+                res @ _ => res,
+            }
+            .unwrap();
+
+            transaction
+                .execute(
+                    "UPDATE workspaces \
+                        SET expiration_time = MIN(expiration_time, ?2) \
+                        WHERE id = ?1",
+                    (workspace_id, expiration_time),
+                )
+                .unwrap();
 
             // The user just expired their workspace,
             // so they probably don't need notifications right away
             transaction
                 .execute(
                     "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
-                    (transaction.last_insert_rowid(), Utc::now()),
+                    (workspace_id, Utc::now()),
                 )
                 .unwrap();
         })
