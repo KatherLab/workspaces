@@ -114,9 +114,9 @@ pub enum Command {
 
         /// Delete this dataset on next cleanup
         ///
-        /// No deletion will take place until the next time `clean` is called.
+        /// No deletion will take place until the next time `maintain` is called.
         /// Be aware that this may happen due to another user / cronjob.
-        #[arg(long = "terminally")]
+        #[arg(long = "now")]
         delete_on_next_clean: bool,
     },
     /// List all existing filesystems
@@ -134,7 +134,7 @@ pub enum Command {
     /// including other users' workspaces.
     /// Expired workspaces will be made read-only.
     /// Snapshots will be created.
-    /// Notification emails may be sent out.
+    /// Notification emails may be sent.
     Maintain,
 }
 
