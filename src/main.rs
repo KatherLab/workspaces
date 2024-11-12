@@ -1,3 +1,4 @@
+use chrono::Utc;
 use clap::Parser;
 use create::create;
 use db_schema::{NEWEST_DB_VERSION, UPDATE_DB};
@@ -7,8 +8,10 @@ use filesystems::filesystems;
 use list::list;
 use maintain::maintain;
 use rename::rename;
-use rusqlite::Connection;
-use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, process};
+use rusqlite::{backup, Connection};
+use std::{
+    collections::HashMap, fs, os::unix::fs::MetadataExt, path::Path, process, time::Duration,
+};
 
 mod cli;
 mod config;
@@ -56,19 +59,10 @@ fn main() {
 
     let args = cli::Args::parse();
 
-    // Make sure database schema is current
-    let mut conn = Connection::open(config.db_path).unwrap();
+    let mut conn = Connection::open(&config.db_path).unwrap();
     conn.pragma_update(None, "foreign_keys", true).unwrap();
 
-    let db_version: usize = conn
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .unwrap();
-    assert!(
-        db_version <= NEWEST_DB_VERSION,
-        "database seems to be from a more current version of workspaces"
-    );
-    // Iteratively apply necessary database updates
-    UPDATE_DB[db_version..].iter().for_each(|f| f(&mut conn));
+    update_database_schema_if_necessary(&mut conn);
 
     match args.command {
         cli::Command::Create {
@@ -201,4 +195,43 @@ fn filesystem_or_default_or_exit(
         eprintln!();
         process::exit(ExitCodes::UnknownWorkspace as i32);
     }
+}
+
+fn update_database_schema_if_necessary(source_db_conn: &mut Connection) {
+    let db_path = Path::new(
+        source_db_conn
+            .path()
+            .expect("database should be file backed"),
+    );
+
+    let db_version: usize = source_db_conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+
+    assert!(
+        db_version <= NEWEST_DB_VERSION,
+        "database seems to be from a more current version of workspaces"
+    );
+
+    if db_version == NEWEST_DB_VERSION {
+        return;
+    }
+
+    // Back up current database in case we need it for roll-backs later
+    let backup_path = db_path.with_file_name(format!(
+        "{}-{}.db.bak",
+        db_path.file_stem().unwrap().to_string_lossy(),
+        Utc::now().format("%Y%m%dT%H%M%S")
+    ));
+
+    let mut backup_dest_db = Connection::open(backup_path).unwrap();
+    backup::Backup::new(source_db_conn, &mut backup_dest_db)
+        .unwrap()
+        .run_to_completion(4, Duration::from_millis(250), None)
+        .unwrap();
+
+    // Iteratively apply necessary database updates
+    UPDATE_DB[db_version..]
+        .iter()
+        .for_each(|f| f(source_db_conn));
 }

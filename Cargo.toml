@@ -16,7 +16,7 @@ hostname = "0.4.0"
 lettre = "0.11.10"
 libsqlite3-sys = "0.26.0"
 prettytable-rs = "0.10.0"
-rusqlite = { version = "0.29.0", features = ["chrono"] }
+rusqlite = { version = "0.29.0", features = ["backup", "chrono"] }
 serde = { version = "1.0.162", features = ["derive"] }
 toml = "0.7.3"
 users = "0.11.0"
