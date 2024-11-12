@@ -63,14 +63,16 @@ pub fn extend(
                 )
                 .unwrap();
 
-            // The user just acknowledged their workspaces status,
-            // so there's no need to notify them for the time being
-            transaction
-                .execute(
-                    "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
-                    (workspace_id, Utc::now()),
-                )
-                .unwrap();
+            if get_current_username().unwrap() == user && get_current_uid() != 0 {
+                // The user just acknowledged their workspaces status,
+                // so there's no need to notify them for the time being
+                transaction
+                    .execute(
+                        "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
+                        (workspace_id, Utc::now()),
+                    )
+                    .unwrap();
+            }
         })
         .unwrap()
         .commit()
