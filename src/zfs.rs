@@ -91,15 +91,15 @@ pub fn set_property(volume: &str, property: &str, value: &str) -> Result<(), Err
 /// Recursively snapshot a volume
 pub fn snapshot(volume: &str) -> Result<(), Error> {
     let status = Command::new("zfs")
-        .args(dbg!([
+        .args([
             "snapshot",
             "-r",
             &format!(
                 "{}@{}",
                 volume,
                 Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            )
-        ]))
+            ),
+        ])
         .status()
         .map_err(Error::Command)?;
     match status.success() {
