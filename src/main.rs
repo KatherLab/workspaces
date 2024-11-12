@@ -79,7 +79,10 @@ fn main() {
             create(
                 &mut conn,
                 &filesystem_name,
-                &config.filesystems[&filesystem_name],
+                &config
+                    .filesystems
+                    .get(&filesystem_name)
+                    .expect("unknown filesystem"),
                 &user,
                 &name,
                 &duration,
@@ -110,7 +113,10 @@ fn main() {
             rename(
                 &mut conn,
                 &filesystem_name,
-                &config.filesystems[&filesystem_name],
+                &config
+                    .filesystems
+                    .get(&filesystem_name)
+                    .expect("unknown filesystem"),
                 &user,
                 &src_workspace_name,
                 &dest_workspace_name,
@@ -130,7 +136,10 @@ fn main() {
             extend(
                 &mut conn,
                 &filesystem_name,
-                &config.filesystems[&filesystem_name],
+                &config
+                    .filesystems
+                    .get(&filesystem_name)
+                    .expect("unknown filesystem"),
                 &user,
                 &name,
                 &duration,
@@ -150,7 +159,10 @@ fn main() {
             expire(
                 &mut conn,
                 &filesystem_name,
-                &config.filesystems[&filesystem_name],
+                &config
+                    .filesystems
+                    .get(&filesystem_name)
+                    .expect("unknown filesystem"),
                 &user,
                 &name,
                 delete_on_next_clean,
