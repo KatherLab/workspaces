@@ -5,26 +5,25 @@ use lettre::{
     transport::smtp::authentication::Credentials, Message, SmtpTransport, Transport,
 };
 use rusqlite::Connection;
-use std::{collections::HashMap, fs, io};
+use std::{collections::HashMap, error::Error, fmt, fs, io};
 use users::{get_user_by_name, os::unix::UserExt};
 
 pub fn maintain(
     conn: &mut Connection,
     filesystems: &HashMap<String, config::Filesystem>,
     smtp_config: &Option<config::SmtpConfig>,
-) {
-    let transaction = conn.transaction().unwrap();
+) -> Result<(), Box<dyn Error>> {
+    let transaction = conn.transaction()?;
     {
         let mut statement = transaction
-            .prepare("SELECT id, filesystem, user, name, expiration_time FROM workspaces")
-            .unwrap();
-        let mut rows = statement.query([]).unwrap();
-        while let Some(row) = rows.next().unwrap() {
-            let workspace_id: i32 = row.get(0).unwrap();
-            let filesystem_name: String = row.get(1).unwrap();
-            let username: String = row.get(2).unwrap();
-            let workspace_name: String = row.get(3).unwrap();
-            let expiration_time: DateTime<Utc> = row.get(4).unwrap();
+            .prepare("SELECT id, filesystem, user, name, expiration_time FROM workspaces")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let workspace_id: i32 = row.get(0)?;
+            let filesystem_name: String = row.get(1)?;
+            let username: String = row.get(2)?;
+            let workspace_name: String = row.get(3)?;
+            let expiration_time: DateTime<Utc> = row.get(4)?;
 
             let filesystem = &filesystems
                 .get(&filesystem_name)
@@ -60,27 +59,27 @@ pub fn maintain(
                 if zfs::destroy(&volume).is_err() {
                     continue;
                 }
-                transaction
-                    .execute(
-                        "DELETE FROM workspaces
+                transaction.execute(
+                    "DELETE FROM workspaces
                             WHERE id = ?1",
-                        [workspace_id],
-                    )
-                    .unwrap();
+                    [workspace_id],
+                )?;
             } else if expiration_time < Local::now() {
                 // Set recently expired workspaces to read-only
-                zfs::set_property(&volume, "readonly", "on").unwrap();
+                zfs::set_property(&volume, "readonly", "on")?;
             }
         }
     }
-    transaction.commit().unwrap();
+    transaction.commit()?;
 
     // Snapshot all remaining filesystems for which this is desired
     for filesystem in filesystems.values() {
         if filesystem.snapshot {
-            zfs::snapshot(&filesystem.root).unwrap()
+            zfs::snapshot(&filesystem.root)?
         }
     }
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -91,6 +90,56 @@ enum NotificationError {
     UserConfigParseError(toml::de::Error),
     SmtpError(lettre::transport::smtp::Error),
     MailboxParseError(AddressError),
+}
+
+impl std::error::Error for NotificationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::UserNotFoundError(..) => None,
+            Self::UserConfigReadError(err) => Some(err),
+            Self::UserConfigParseError(err) => Some(err),
+            Self::SmtpError(err) => Some(err),
+            Self::MailboxParseError(err) => Some(err),
+        }
+    }
+}
+
+impl std::fmt::Display for NotificationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UserNotFoundError(username) => write!(f, "User not found: {}", username),
+            Self::UserConfigReadError(err) => write!(f, "User configuration read error: {}", err),
+            Self::UserConfigParseError(err) => {
+                write!(f, "User configuration parsing error: {}", err)
+            }
+            Self::SmtpError(err) => write!(f, "SMTP error: {}", err),
+            Self::MailboxParseError(err) => write!(f, "Mailbox parse error: {}", err),
+        }
+    }
+}
+
+impl From<io::Error> for NotificationError {
+    fn from(value: io::Error) -> Self {
+        NotificationError::UserConfigReadError(value)
+    }
+}
+
+impl From<toml::de::Error> for NotificationError {
+    fn from(value: toml::de::Error) -> Self {
+        NotificationError::UserConfigParseError(value)
+    }
+}
+
+impl From<lettre::transport::smtp::Error> for NotificationError {
+    fn from(value: lettre::transport::smtp::Error) -> Self {
+        NotificationError::SmtpError(value)
+    }
+}
+
+impl From<AddressError> for NotificationError {
+    fn from(value: AddressError) -> Self {
+        NotificationError::MailboxParseError(value)
+    }
 }
 
 fn notify_if_necessary_(
@@ -165,14 +214,14 @@ fn notify_if_necessary_(
                 format!(
                     "Your workspace {} on {} will expire in {} days.",
                     workspace_name,
-                    hostname::get().unwrap().to_string_lossy(),
+                    hostname::get()?.to_string_lossy(),
                     duration_until_expiry.num_days()
                 )
             } else {
                 format!(
                     "Your workspace {} on {} will be deleted in {} days.",
                     workspace_name,
-                    hostname::get().unwrap().to_string_lossy(),
+                    hostname::get()?.to_string_lossy(),
                     (filesystem.expired_retention + duration_until_expiry).num_days()
                 )
             };
@@ -181,7 +230,7 @@ fn notify_if_necessary_(
                 format!(
                     "{}\n\nYou can extend it by logging into {} and running\n`workspaces extend -d <duration in days> {}`.",
                     &subject,
-                    hostname::get().unwrap().to_string_lossy(),
+                    hostname::get()?.to_string_lossy(),
                     workspace_name,
                 )
             ).unwrap();

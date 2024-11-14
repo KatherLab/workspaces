@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, error::Error, path::PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use prettytable::{
@@ -24,7 +24,7 @@ pub fn list(
     filter_users: &Option<Vec<String>>,
     filter_filesystems: &Option<Vec<String>>,
     output: &Option<Vec<cli::WorkspacesColumns>>,
-) {
+) -> Result<(), Box<dyn Error>> {
     use cli::WorkspacesColumns;
     // the default columns
     let output = output.clone().unwrap_or(vec![
@@ -47,22 +47,19 @@ pub fn list(
             .collect(),
     ));
 
-    let mut statement = conn
-        .prepare("SELECT filesystem, user, name, expiration_time FROM workspaces")
-        .unwrap();
-    let workspace_iter = statement
-        .query_map([], |row| {
-            Ok(WorkspacesRow {
-                filesystem_name: row.get(0)?,
-                user: row.get(1)?,
-                name: row.get(2)?,
-                expiration_time: row.get(3)?,
-            })
+    let mut statement =
+        conn.prepare("SELECT filesystem, user, name, expiration_time FROM workspaces")?;
+    let workspace_iter = statement.query_map([], |row| {
+        Ok(WorkspacesRow {
+            filesystem_name: row.get(0)?,
+            user: row.get(1)?,
+            name: row.get(2)?,
+            expiration_time: row.get(3)?,
         })
-        .unwrap();
+    })?;
 
     for workspace in workspace_iter {
-        let workspace = workspace.unwrap();
+        let workspace = workspace?;
         if !filter_users
             .as_ref()
             .map_or(true, |us| us.contains(&workspace.user))
@@ -147,4 +144,5 @@ pub fn list(
     }
 
     table.printstd();
+    Ok(())
 }

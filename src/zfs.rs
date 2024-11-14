@@ -16,12 +16,45 @@ pub enum Error {
     PropertyParse(Box<dyn std::error::Error>),
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Command(err) => {
+                write!(f, "Command error: {}", err)
+            }
+            Error::ZfsStatus(err) => {
+                write!(f, "ZFS status error: {}", err)
+            }
+            Error::PropertyParse(err) => {
+                write!(f, "ZFS property parsing error: {}", err)
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Command(err) => err.source(),
+            Error::PropertyParse(err) => err.source(),
+            Error::ZfsStatus(..) => None,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Error::Command(value)
+    }
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
 /// Creates a new ZFS volume
-pub fn create(volume: &str) -> Result<(), Error> {
+pub fn create(volume: &str) -> Result<()> {
     let status = Command::new("zfs")
         .args(["create", "-p", volume])
-        .status()
-        .map_err(Error::Command)?;
+        .status()?;
     match status.success() {
         true => Ok(()),
         false => Err(Error::ZfsStatus(status)),
@@ -29,11 +62,10 @@ pub fn create(volume: &str) -> Result<(), Error> {
 }
 
 /// Destroys a ZFS volume
-pub fn destroy(volume: &str) -> Result<(), Error> {
+pub fn destroy(volume: &str) -> Result<()> {
     let status = Command::new("zfs")
         .args(["destroy", "-r", volume])
-        .status()
-        .map_err(Error::Command)?;
+        .status()?;
     match status.success() {
         true => Ok(()),
         false => Err(Error::ZfsStatus(status)),
@@ -41,11 +73,10 @@ pub fn destroy(volume: &str) -> Result<(), Error> {
 }
 
 /// Renames a ZFS volume
-pub fn rename(src_volume: &str, dest_volume: &str) -> Result<(), Error> {
+pub fn rename(src_volume: &str, dest_volume: &str) -> Result<()> {
     let status = Command::new("zfs")
         .args(["rename", src_volume, dest_volume])
-        .status()
-        .map_err(Error::Command)?;
+        .status()?;
     match status.success() {
         true => Ok(()),
         false => Err(Error::ZfsStatus(status)),
@@ -53,7 +84,7 @@ pub fn rename(src_volume: &str, dest_volume: &str) -> Result<(), Error> {
 }
 
 /// Retrieves a ZFS property
-pub fn get_property<F: FromStr>(volume: &str, property: &str) -> Result<F, Error>
+pub fn get_property<F: FromStr>(volume: &str, property: &str) -> Result<F>
 where
     <F as FromStr>::Err: std::error::Error + 'static,
 {
@@ -63,8 +94,7 @@ where
             "-o", "value", // output only desired value
             property, volume,
         ])
-        .output()
-        .map_err(Error::Command)?;
+        .output()?;
     if !output.status.success() {
         return Err(Error::ZfsStatus(output.status));
     }
@@ -76,11 +106,10 @@ where
 }
 
 /// Sets a ZFS property
-pub fn set_property(volume: &str, property: &str, value: &str) -> Result<(), Error> {
+pub fn set_property(volume: &str, property: &str, value: &str) -> Result<()> {
     let status: process::ExitStatus = Command::new("zfs")
         .args(["set", &format!("{}={}", property, value), volume])
-        .status()
-        .map_err(Error::Command)?;
+        .status()?;
 
     match status.success() {
         true => Ok(()),
@@ -89,7 +118,7 @@ pub fn set_property(volume: &str, property: &str, value: &str) -> Result<(), Err
 }
 
 /// Recursively snapshot a volume
-pub fn snapshot(volume: &str) -> Result<(), Error> {
+pub fn snapshot(volume: &str) -> Result<()> {
     let status = Command::new("zfs")
         .args([
             "snapshot",
@@ -100,8 +129,7 @@ pub fn snapshot(volume: &str) -> Result<(), Error> {
                 Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             ),
         ])
-        .status()
-        .map_err(Error::Command)?;
+        .status()?;
     match status.success() {
         true => Ok(()),
         false => Err(Error::ZfsStatus(status)),

@@ -1,4 +1,4 @@
-use std::process;
+use std::{error::Error, process};
 
 use rusqlite::Connection;
 use users::{get_current_uid, get_current_username};
@@ -13,7 +13,7 @@ pub fn rename(
     user: &str,
     src_name: &str,
     dest_name: &str,
-) {
+) -> Result<(), Box<dyn Error>> {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
         process::exit(ExitCodes::InsufficientPrivileges as i32);
@@ -23,13 +23,13 @@ pub fn rename(
         process::exit(ExitCodes::FsDisabled as i32);
     }
 
-    let transaction = conn.transaction().unwrap();
+    let transaction = conn.transaction()?;
     match transaction.execute(
-        "UPDATE workspaces
-                SET name = ?1
-                WHERE filesystem = ?2
-                    AND user = ?3
-                    AND name = ?4",
+        "UPDATE workspaces \
+            SET name = ?1 \
+            WHERE filesystem = ?2 \
+                AND user = ?3 \
+                AND name = ?4",
         (dest_name, filesystem_name, user, src_name),
     ) {
         Ok(_) => {}
@@ -48,6 +48,8 @@ pub fn rename(
 
     let src_volume = to_volume_string(&filesystem.root, user, src_name);
     let dest_volume = to_volume_string(&filesystem.root, user, dest_name);
-    zfs::rename(&src_volume, &dest_volume).unwrap();
-    transaction.commit().unwrap();
+    zfs::rename(&src_volume, &dest_volume)?;
+    transaction.commit()?;
+
+    Ok(())
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, error::Error};
 
 use prettytable::{
     color,
@@ -14,7 +14,7 @@ use crate::{
 pub fn filesystems(
     filesystems: &HashMap<String, config::Filesystem>,
     output: Option<Vec<cli::FilesystemsColumns>>,
-) {
+) -> Result<(), Box<dyn Error>> {
     // the default columns
     let output = output.unwrap_or(vec![
         FilesystemsColumns::Name,
@@ -37,8 +37,8 @@ pub fn filesystems(
     ));
 
     for (name, info) in filesystems {
-        let used = zfs::get_property::<usize>(&info.root, "used").unwrap();
-        let available = zfs::get_property::<usize>(&info.root, "available").unwrap();
+        let used = zfs::get_property::<usize>(&info.root, "used")?;
+        let available = zfs::get_property::<usize>(&info.root, "available")?;
         let total = used + available;
         table.add_row(Row::new(
             output
@@ -88,4 +88,6 @@ pub fn filesystems(
     }
 
     table.printstd();
+
+    Ok(())
 }

@@ -2,6 +2,7 @@ use crate::{config, to_volume_string, zfs, ExitCodes};
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
 use std::{
+    error::Error,
     fs,
     os::unix::fs::PermissionsExt,
     process::{self, Command},
@@ -16,8 +17,8 @@ pub fn create(
     user: &str,
     name: &str,
     duration: &Duration,
-) {
-    if get_current_username().unwrap() != user && get_current_uid() != 0 {
+) -> Result<(), Box<dyn Error>> {
+    if get_current_username().expect("couldn't get username") != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
         process::exit(ExitCodes::InsufficientPrivileges as i32);
     }
@@ -63,25 +64,24 @@ pub fn create(
                 (transaction.last_insert_rowid(), Utc::now()),
             ).unwrap();
         }
-    ).unwrap()
-    .commit()
-    .unwrap();
+    )?.commit()?;
 
     let volume = to_volume_string(&filesystem.root, user, name);
 
-    zfs::create(&volume).unwrap();
+    zfs::create(&volume)?;
 
-    let mountpoint = zfs::get_property(&volume, "mountpoint").unwrap();
+    let mountpoint = zfs::get_property(&volume, "mountpoint")?;
 
-    let mut permissions = fs::metadata(&mountpoint).unwrap().permissions();
+    let mut permissions = fs::metadata(&mountpoint)?.permissions();
     permissions.set_mode(0o750);
-    fs::set_permissions(&mountpoint, permissions).unwrap();
+    fs::set_permissions(&mountpoint, permissions)?;
 
     let status = Command::new("chown")
         .args([&format!("{}:{}", user, user), &mountpoint])
-        .status()
-        .unwrap();
+        .status()?;
     assert!(status.success(), "failed to change owner on dataset");
 
     println!("Created workspace at {}", mountpoint);
+
+    Ok(())
 }

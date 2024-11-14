@@ -1,4 +1,4 @@
-use std::process;
+use std::{error::Error, process};
 
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
@@ -13,7 +13,7 @@ pub fn extend(
     user: &str,
     name: &str,
     duration: &Duration,
-) {
+) -> Result<(), Box<dyn Error>> {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
         process::exit(ExitCodes::InsufficientPrivileges as i32);
@@ -73,10 +73,8 @@ pub fn extend(
                     )
                     .unwrap();
             }
-        })
-        .unwrap()
-        .commit()
-        .unwrap();
+        })?
+        .commit()?;
 
     zfs::set_property(
         &to_volume_string(&filesystem.root, user, name),
@@ -84,4 +82,6 @@ pub fn extend(
         "off",
     )
     .unwrap();
+
+    Ok(())
 }

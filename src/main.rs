@@ -10,7 +10,8 @@ use maintain::maintain;
 use rename::rename;
 use rusqlite::{backup, Connection};
 use std::{
-    collections::HashMap, fs, os::unix::fs::MetadataExt, path::Path, process, time::Duration,
+    collections::HashMap, error::Error, fs, os::unix::fs::MetadataExt, path::Path, process,
+    time::Duration,
 };
 
 mod cli;
@@ -45,11 +46,11 @@ fn to_volume_string(root: &str, user: &str, name: &str) -> String {
     format!("{}/{}/{}", root, user, name)
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     // Read config
     let config_file =
         fs::File::open(config::CONFIG_PATH).expect("could not find configuration file");
-    if (config_file.metadata().unwrap().mode() & 0o077) != 0 {
+    if (config_file.metadata()?.mode() & 0o077) != 0 {
         panic!("config file permissions too liberal: should be 600");
     }
     let toml_str =
@@ -59,10 +60,10 @@ fn main() {
 
     let args = cli::Args::parse();
 
-    let mut conn = Connection::open(&config.db_path).unwrap();
-    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    let mut conn = Connection::open(&config.db_path)?;
+    conn.pragma_update(None, "foreign_keys", true)?;
 
-    update_database_schema_if_necessary(&mut conn);
+    update_database_schema_if_necessary(&mut conn)?;
 
     match args.command {
         cli::Command::Create {
@@ -209,16 +210,17 @@ fn filesystem_or_default_or_exit(
     }
 }
 
-fn update_database_schema_if_necessary(source_db_conn: &mut Connection) {
+fn update_database_schema_if_necessary(
+    source_db_conn: &mut Connection,
+) -> Result<(), Box<dyn Error>> {
     let db_path = Path::new(
         source_db_conn
             .path()
             .expect("database should be file backed"),
     );
 
-    let db_version: usize = source_db_conn
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .unwrap();
+    let db_version: usize =
+        source_db_conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
 
     assert!(
         db_version <= NEWEST_DB_VERSION,
@@ -226,7 +228,7 @@ fn update_database_schema_if_necessary(source_db_conn: &mut Connection) {
     );
 
     if db_version == NEWEST_DB_VERSION {
-        return;
+        return Ok(());
     }
 
     // Back up current database in case we need it for roll-backs later
@@ -236,14 +238,17 @@ fn update_database_schema_if_necessary(source_db_conn: &mut Connection) {
         Utc::now().format("%Y%m%dT%H%M%S")
     ));
 
-    let mut backup_dest_db = Connection::open(backup_path).unwrap();
-    backup::Backup::new(source_db_conn, &mut backup_dest_db)
-        .unwrap()
-        .run_to_completion(4, Duration::from_millis(250), None)
-        .unwrap();
+    let mut backup_dest_db = Connection::open(backup_path)?;
+    backup::Backup::new(source_db_conn, &mut backup_dest_db)?.run_to_completion(
+        4,
+        Duration::from_millis(250),
+        None,
+    )?;
 
     // Iteratively apply necessary database updates
-    UPDATE_DB[db_version..]
-        .iter()
-        .for_each(|f| f(source_db_conn));
+    for update_proc in UPDATE_DB[db_version..].iter() {
+        update_proc(source_db_conn)?;
+    }
+
+    Ok(())
 }
