@@ -56,11 +56,12 @@ pub fn expire(
     )?;
 
     if get_current_username().unwrap() == user && get_current_uid() != 0 {
-        // The user just expired their workspace,
-        // so they probably don't need notifications right away
+        // The user just expired their workspace, so they don't want deletion notices.
+        // We disable them by creating a faux notification in the future.
+        // TODO refactor this into a separate column in workspaces.
         transaction.execute(
             "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
-            (workspace_id, Utc::now()),
+            (workspace_id, expiration_time),
         )?;
     }
 

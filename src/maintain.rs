@@ -228,9 +228,12 @@ fn notify_if_necessary_(
 
             let email = email.subject(&subject).body(
                 format!(
-                    "{}\n\nYou can extend it by logging into {} and running\n`workspaces extend -d <duration in days> {}`.",
+                    "{}\n\nYou can extend it by logging into {} and running\n`workspaces extend -d <duration in days> {}`.\n\n\
+                    To disable notifications for this workspace, manually mark this workspace as expired by running\n\
+                    `workspaces expire {}`.",
                     &subject,
                     hostname::get()?.to_string_lossy(),
+                    workspace_name,
                     workspace_name,
                 )
             ).unwrap();
