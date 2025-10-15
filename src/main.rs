@@ -54,7 +54,9 @@ fn warn_missing_email_for_user(username: &str) {
 
     let Some(user) = get_user_by_name(username) else {
         eprintln!(
-            "[workspaces] Note: could not resolve user `{}` to check email config.",
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  [workspaces] Could not resolve user `{}` to check email config.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
             username
         );
         return;
@@ -65,9 +67,14 @@ fn warn_missing_email_for_user(username: &str) {
         Ok(s) => s,
         Err(_) => {
             eprintln!(
-                "[workspaces] You have not set an email for notifications (missing {}).\n\
-                 Tip (bash): mkdir -p {home}/.config && echo 'email = \"you@example.org\"' > {home}/.config/workspaces.toml",
-                path.display(),
+                "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  [workspaces] No email configured for notifications
+    Missing file: {path}
+
+💡  To fix this, run:
+    mkdir -p {home}/.config && echo 'email = \"you@example.org\"' > {path}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
+                path = path.display(),
                 home = user.home_dir().to_string_lossy()
             );
             return;
@@ -79,14 +86,19 @@ fn warn_missing_email_for_user(username: &str) {
         Ok(_) => {} // all good
         Err(_) => {
             eprintln!(
-                "[workspaces] Your {} is missing a valid `email` entry.\n\
-                 Tip (bash): echo 'email = \"you@example.org\"' > {}",
-                path.display(),
-                path.display()
+                "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  [workspaces] Invalid or missing `email` in config:
+    {path}
+
+💡  To fix this, run:
+    echo 'email = \"you@example.org\"' > {path}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
+                path = path.display()
             );
         }
     }
 }
+
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Read config
