@@ -216,10 +216,14 @@ fn notify_if_necessary_(
             builder = builder.port(465).tls(Tls::Wrapper(params));
         }
         (config::TlsMode::Starttls, Some(p)) => {
-            builder = builder.port(p); // STARTTLS is relay() default
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(p).tls(Tls::Required(params));
         }
         (config::TlsMode::Starttls, None) => {
-            // default: 587 + STARTTLS (already configured by relay())
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.tls(Tls::Required(params));
         }
     }
 
@@ -366,9 +370,15 @@ pub fn notify_test(
             builder = builder.port(465).tls(Tls::Wrapper(params));
         }
         (config::TlsMode::Starttls, Some(p)) => {
-            builder = builder.port(p);
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(p).tls(Tls::Required(params));
         }
-        (config::TlsMode::Starttls, None) => {}
+        (config::TlsMode::Starttls, None) => {
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.tls(Tls::Required(params));
+        }
     }
 
     if let Some(method) = smtp_config.auth {
