@@ -6,23 +6,54 @@ period of time. This is a convenient method for handling temporary files and
 preventing clutter on file systems.
 
 Workspaces uses ZFS to efficiently manage the creation, extension, and deletion
-of workspaces.
+of workspaces and supports optional **email notifications** for important events.
 
 ## Installation
 
-Before installing Workspaces, you must have Rust installed. To install and build
-Workspaces, run the following command:
+Before installing Workspaces, you must have Rust installed.  
+You also need to install the following system packages:
+
+```console
+$ sudo apt install sqlite3 libsqlite3-dev libssl-dev pkg-config
+````
+
+Then install and build Workspaces:
+
 ```console
 $ make && sudo make install
 ```
+
 You must manually modify the `/etc/workspaces/workspaces.toml` file, and you
 must have already set up a ZFS zpool.
 
 To activate automatic deletion of old workspaces, enable the corresponding
 systemd timer:
+
 ```console
 $ sudo systemctl enable --now maintain-workspaces.timer
 ```
+
+> **Note:**
+> The `workspaces maintain` command (triggered by the timer) requires **admin (root)** privileges.
+
+## Email Notifications
+
+Workspaces can optionally send notification emails for the following events:
+
+* A workspace is **created**, **extended**, or **manually expired**
+* A workspace is **deleted** after its retention period
+* Periodic **expiry reminders** (based on your configured `expiry_notifications` schedule)
+
+To enable this, configure the `[smtp]` section in `/etc/workspaces/workspaces.toml`
+and make sure each user sets up their personal email address once:
+
+```bash
+mkdir -p ~/.config
+echo 'email = "user@example.org"' > ~/.config/workspaces.toml
+```
+
+If a user has not configured their email, the CLI will print a clear reminder
+with the exact command to fix it.
 
 ## User Tutorial
 
@@ -31,11 +62,8 @@ creating a workspace, extending its expiry date, and manually expiring it.
 
 ### Creating a Workspace
 
-Use the `workspaces filesystems` command to display the available filesystems
-and their associated details, including the amount of free space, the maximum
-time you can initially create a workspace for, and the number of days a
-read-only copy of your workspace will be kept after it expires before it is
-finally deleted:
+Use the `workspaces filesystems` command to display the available filesystems:
+
 ```console
 $ workspaces filesystems
 NAME  USED   FREE    TOTAL   DURATION  RETENTION
@@ -44,87 +72,55 @@ ssd      0G   5999G   5999G       30d         7d
 ```
 
 To create a workspace named `testws` on the `bulk` filesystem with a ten-day
-expiry date, enter:
+expiry date:
+
 ```console
 $ workspaces create -f bulk -d 10 testws
 Created workspace at /mnt/bulk/mvantreeck/testws
 ```
 
-Use the `workspaces list` command to view all available workspaces:
+If SMTP is configured, you’ll also receive a short email confirmation.
+
+Use `workspaces list` to view all available workspaces:
+
 ```console
 $ workspaces list
 NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
 testws  mvantreeck  bulk  expires in  9d    0G  /mnt/bulk/mvantreeck/testws
 ```
 
-You may now use your workspace like any other folder:
-```console
-$ echo "Hello workspaces" > /mnt/bulk/mvantreeck/testws/testfile
-```
-
 ### Extending a Workspace
 
-If you need to extend the expiry date of your workspace, use the `extend`
-command:
+To extend your workspace before it expires:
+
 ```console
-$ workspaces list
-NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
-testws  mvantreeck  bulk  expires in  3d    4G  /mnt/bulk/mvantreeck/testws
-$ workspaces extend -f bulk -d 16 testws
-$ workspaces list
-NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
-testws  mvantreeck  bulk  expires in 15d    4G  /mnt/bulk/mvantreeck/testws
+$ workspaces extend -f bulk -d 7 testws
 ```
 
-If you fail to extend your workspace in time, it will expire and become
-read-only:
-```console
-$ workspaces list
-NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
-testws  mvantreeck  bulk  deleted in 23d   34G  /mnt/bulk/mvantreeck/testws
-$ touch /mnt/bulk/mvantreeck/testws/testfile
-touch: cannot touch '/mnt/bulk/mvantreeck/testws/testfile': Read-only file system
-```
-
-However, you can make it writable again by extending it once more:
-```console
-$ workspaces extend -f bulk -d 3 testws
-$ workspaces list
-NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
-testws  mvantreeck  bulk  expires in  2d   34G  /mnt/bulk/mvantreeck/testws
-$ touch /mnt/bulk/mvantreeck/test1/testfile	# completes successfully
-```
-
-If you don't extend the workspace in time, it will eventually be deleted.
+You’ll receive an email confirming the new expiry date.
 
 ### Manually Expiring a Workspace
 
-To manually expire a workspace that is no longer needed, you can use the
-`expire` command. After running this command, the workspace will will become
-read-only and marked for eventualy deletion:
+To manually expire a workspace that is no longer needed:
+
 ```console
 $ workspaces expire -f bulk testws
-$ workspaces list
-NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
-testws  mvantreeck  bulk  deleted in 29d   58G  /mnt/bulk/mvantreeck/testws
-$ touch /mnt/bulk/mvantreeck/testws/testfile
-touch: cannot touch '/mnt/bulk/mvantreeck/testws/testfile': Read-only file system
 ```
 
-If you change your mind and decide you need the workspace again before its final
-deletion date, you can extend its expiry date using the `extend` command.
+The workspace becomes read-only and will be deleted automatically later.
+An email notification is sent when it’s marked expired or scheduled for deletion.
 
 ### Manually Running the Garbage Collector
 
-Usually, your system administrator will have set up the garbage collector to
-automatically clean up workspaces that are flagged for deletion once in a while.
-However, you can also run the garbage collector manually using the `maintain`
-command:
+Usually, your administrator will have configured automatic cleanup through the
+systemd timer. However, an admin can also run it manually:
+
 ```console
-$ workspaces list
-NAME    USER        FS    EXPIRY        SIZE  MOUNTPOINT
-testws  mvantreeck  bulk  deleted soon   58G  /mnt/bulk/mvantreeck/testws
-$ workspaces maintain
-NAME  USER  FS  EXPIRY  SIZE  MOUNTPOINT
-[ no workspaces ]
+# must be run as root
+$ sudo workspaces maintain
 ```
+
+This will delete expired workspaces beyond their retention date and send
+final deletion notifications.
+
+
