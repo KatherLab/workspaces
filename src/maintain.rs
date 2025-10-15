@@ -197,11 +197,8 @@ fn notify_if_necessary_(
     }
     // Optional auth mechanism override
     if let Some(method) = smtp_config.auth {
-        let mech = match method {
-            config::AuthMethod::Plain => Mechanism::Plain,
-            config::AuthMethod::Login => Mechanism::Login,
-        };
-        builder = builder.authentication(mech);
+        let mech = match method { config::AuthMethod::Plain => Mechanism::Plain, config::AuthMethod::Login => Mechanism::Login };
+        builder = builder.authentication(vec![mech]);
     }
     let mailer = builder.credentials(creds).build();
 
@@ -326,11 +323,8 @@ pub fn notify_test(
         builder = builder.port(p);
     }
     if let Some(method) = smtp_config.auth {
-        let mech = match method {
-            config::AuthMethod::Plain => Mechanism::Plain,
-            config::AuthMethod::Login => Mechanism::Login,
-        };
-        builder = builder.authentication(mech);
+        let mech = match method { config::AuthMethod::Plain => Mechanism::Plain, config::AuthMethod::Login => Mechanism::Login };
+        builder = builder.authentication(vec![mech]);
     }
     let mailer = builder.credentials(creds).build();
 
