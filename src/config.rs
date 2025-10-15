@@ -1,7 +1,6 @@
 use chrono::Duration;
 use lettre::message::Mailbox;
 use serde::de::{self, Unexpected};
-use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
