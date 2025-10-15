@@ -5,6 +5,7 @@ use std::{
     error::Error,
     fs,
     os::unix::fs::PermissionsExt,
+    path::PathBuf,
     process::{self, Command},
 };
 use users::{get_current_uid, get_current_username};
@@ -17,6 +18,7 @@ pub fn create(
     user: &str,
     name: &str,
     duration: &Duration,
+    smtp: &Option<config::SmtpConfig>, // <-- added parameter
 ) -> Result<(), Box<dyn Error>> {
     if get_current_username().expect("couldn't get username") != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
@@ -70,18 +72,33 @@ pub fn create(
 
     zfs::create(&volume)?;
 
-    let mountpoint = zfs::get_property(&volume, "mountpoint")?;
+    // Explicitly request PathBuf so .display() works
+    let mountpoint: PathBuf = zfs::get_property::<PathBuf>(&volume, "mountpoint")?;
 
     let mut permissions = fs::metadata(&mountpoint)?.permissions();
     permissions.set_mode(0o750);
     fs::set_permissions(&mountpoint, permissions)?;
 
     let status = Command::new("chown")
-        .args([&format!("{}:{}", user, user), &mountpoint])
+        .args([&format!("{}:{}", user, user), &mountpoint.to_string_lossy().to_string()])
         .status()?;
     assert!(status.success(), "failed to change owner on dataset");
 
-    println!("Created workspace at {}", mountpoint);
+    println!("Created workspace at {}", mountpoint.display());
+
+    // Send "created" email (best-effort)
+    if let Some(smtp_cfg) = smtp.as_ref() {
+        let host = hostname::get()?.to_string_lossy().to_string();
+        let subject = format!("Workspace {} created on {}", name, host);
+        let expiry_days = duration.num_days();
+        let body = format!(
+            "Hello,\n\nYour workspace \"{}\" has been created on {}.\nFilesystem: {}\nMountpoint: {}\nInitial expiry: in {} days.\n\nYou can extend it with:\n  workspaces extend -f {} -d <days> {}\n",
+            name, host, filesystem_name, mountpoint.display(), expiry_days, filesystem_name, name
+        );
+        if let Err(e) = crate::maintain::notify_event(user, smtp_cfg, subject, body) {
+            eprintln!("Failed to send 'created' email: {}", e);
+        }
+    }
 
     Ok(())
 }

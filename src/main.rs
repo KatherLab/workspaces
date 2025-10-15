@@ -13,7 +13,7 @@ use std::{
     collections::HashMap, error::Error, fs, os::unix::fs::MetadataExt, path::Path, process,
     time::Duration,
 };
-use users::get_current_uid;
+use users::{get_current_uid, get_current_username};
 
 mod cli;
 mod config;
@@ -47,6 +47,47 @@ fn to_volume_string(root: &str, user: &str, name: &str) -> String {
     format!("{}/{}/{}", root, user, name)
 }
 
+/// Warns if `~USERNAME/.config/workspaces.toml` is missing or lacks a valid `email`.
+fn warn_missing_email_for_user(username: &str) {
+    use std::fs;
+    use users::{get_user_by_name, os::unix::UserExt};
+
+    let Some(user) = get_user_by_name(username) else {
+        eprintln!(
+            "[workspaces] Note: could not resolve user `{}` to check email config.",
+            username
+        );
+        return;
+    };
+
+    let path = user.home_dir().join(".config/workspaces.toml");
+    let toml_str = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!(
+                "[workspaces] You have not set an email for notifications (missing {}).\n\
+                 Tip (bash): mkdir -p {home}/.config && echo 'email = \"you@example.org\"' > {home}/.config/workspaces.toml",
+                path.display(),
+                home = user.home_dir().to_string_lossy()
+            );
+            return;
+        }
+    };
+
+    // Parse and validate via existing type (ensures a valid email format)
+    match toml::from_str::<crate::config::UserConfig>(&toml_str) {
+        Ok(_) => {} // all good
+        Err(_) => {
+            eprintln!(
+                "[workspaces] Your {} is missing a valid `email` entry.\n\
+                 Tip (bash): echo 'email = \"you@example.org\"' > {}",
+                path.display(),
+                path.display()
+            );
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     // Read config
     let config_file =
@@ -61,6 +102,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = cli::Args::parse();
 
+    // Warn for the invoking user on every CLI run
+    if let Some(me) = get_current_username() {
+        warn_missing_email_for_user(&me.to_string_lossy());
+    }
+
     let mut conn = Connection::open(&config.db_path)?;
     conn.pragma_update(None, "foreign_keys", true)?;
 
@@ -73,6 +119,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             duration,
             user,
         } => {
+            // Warn for target user
+            warn_missing_email_for_user(&user);
+
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
                 &config.filesystems,
@@ -88,6 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &user,
                 &name,
                 &duration,
+                &config.smtp, // pass SMTP
             )
         }
         cli::Command::List {
@@ -107,6 +157,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             user,
             filesystem_name,
         } => {
+            // Warn for target user
+            warn_missing_email_for_user(&user);
+
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
                 &config.filesystems,
@@ -130,6 +183,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             user,
             duration,
         } => {
+            // Warn for target user
+            warn_missing_email_for_user(&user);
+
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
                 &config.filesystems,
@@ -145,14 +201,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &user,
                 &name,
                 &duration,
+                &config.smtp, // pass SMTP
             )
         }
+        // Correct single Expire arm
         cli::Command::Expire {
             filesystem_name,
             name,
             user,
             delete_on_next_clean,
         } => {
+            // Warn for target user
+            warn_missing_email_for_user(&user);
+
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
                 &config.filesystems,
@@ -168,11 +229,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &user,
                 &name,
                 delete_on_next_clean,
+                &config.smtp, // pass SMTP
             )
         }
         cli::Command::Filesystems { output } => filesystems(&config.filesystems, output),
         cli::Command::Maintain => maintain(&mut conn, &config.filesystems, &config.smtp),
         cli::Command::NotifyTest { user, to } => {
+            // Warn for target user
+            warn_missing_email_for_user(&user);
+
             // Admins only
             if get_current_uid() != 0 {
                 eprintln!("You are not allowed to execute this operation");

@@ -13,6 +13,7 @@ pub fn expire(
     user: &str,
     name: &str,
     delete_on_next_clean: bool,
+    smtp: &Option<config::SmtpConfig>,
 ) -> Result<(), Box<dyn Error>> {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
@@ -72,6 +73,29 @@ pub fn expire(
         "readonly",
         "on",
     )?;
+
+    if let Some(smtp_cfg) = smtp.as_ref() {
+        let host = hostname::get()?.to_string_lossy().to_string();
+        let subject = if delete_on_next_clean {
+            format!("Workspace {} scheduled for deletion on {}", name, host)
+        } else {
+            format!("Workspace {} marked expired on {}", name, host)
+        };
+        let body = if delete_on_next_clean {
+            format!(
+                "Hello,\n\nYour workspace \"{}\" on {} was marked for deletion on the next cleanup.\nFilesystem: {}\nIt will be removed during the next 'workspaces maintain' run.\n",
+                name, host, filesystem_name
+            )
+        } else {
+            format!(
+                "Hello,\n\nYour workspace \"{}\" on {} has been marked expired and set read-only.\nFilesystem: {}\nYou can still re-enable it by extending:\n  workspaces extend -f {} -d <days> {}\n",
+                name, host, filesystem_name, filesystem_name, name
+            )
+        };
+        if let Err(e) = crate::maintain::notify_event(user, smtp_cfg, subject, body) {
+            eprintln!("Failed to send 'expired' email: {}", e);
+        }
+    }
 
     Ok(())
 }

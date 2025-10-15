@@ -13,6 +13,7 @@ pub fn extend(
     user: &str,
     name: &str,
     duration: &Duration,
+    smtp: &Option<config::SmtpConfig>,
 ) -> Result<(), Box<dyn Error>> {
     if get_current_username().unwrap() != user && get_current_uid() != 0 {
         eprintln!("You are not allowed to execute this operation");
@@ -93,6 +94,23 @@ pub fn extend(
         "off",
     )
     .unwrap();
+
+    // Find the current (post-update) expiration_time
+    let new_expiration: chrono::DateTime<chrono::Utc> = conn
+        .prepare("SELECT expiration_time FROM workspaces WHERE filesystem=?1 AND user=?2 AND name=?3")?
+        .query_row((filesystem_name, user, name), |row| row.get(0))?;
+
+    if let Some(smtp_cfg) = smtp.as_ref() {
+        let host = hostname::get()?.to_string_lossy().to_string();
+        let subject = format!("Workspace {} extended on {}", name, host);
+        let body = format!(
+            "Hello,\n\nYour workspace \"{}\" on {} was extended.\nFilesystem: {}\nNew expiry date: {}\n(days until expiry: {} days)\n",
+            name, host, filesystem_name, new_expiration, (new_expiration - chrono::Utc::now()).num_days()
+        );
+        if let Err(e) = crate::maintain::notify_event(user, smtp_cfg, subject, body) {
+            eprintln!("Failed to send 'extended' email: {}", e);
+        }
+    }
 
     Ok(())
 }

@@ -68,6 +68,18 @@ pub fn maintain(
                             WHERE id = ?1",
                     [workspace_id],
                 )?;
+                if let Some(smtp) = smtp_config {
+                    let host = hostname::get()?.to_string_lossy().to_string();
+                    let subject = format!("Your workspace {} on {} was deleted.", workspace_name, host);
+                    let body = format!(
+                        "Hello,\n\nYour workspace \"{}\" on {} has been permanently deleted.\nFilesystem: {}\nOwner: {}\n",
+                        workspace_name, host, filesystem_name, username
+                    );
+                    // Best-effort: if email fails, don't abort the cleanup run
+                    if let Err(e) = notify_event(&username, smtp, subject, body) {
+                        eprintln!("Failed to send deletion notice for {}: {}", workspace_name, e);
+                    }
+                }
             } else if expiration_time < Local::now() {
                 // Set recently expired workspaces to read-only
                 zfs::set_property(&volume, "readonly", "on")?;
@@ -418,5 +430,90 @@ If you can read this, SMTP is configured correctly.\n",
 
     mailer.send(&msg)?;
     println!("Sent test email to {}", to_mailbox);
+    Ok(())
+}
+
+
+/// Send a one-off event email with custom subject/body to a user's address
+/// resolved from `~/.config/workspaces.toml` (UserConfig.email).
+pub fn notify_event(
+    target_username: &str,
+    smtp_config: &crate::config::SmtpConfig,
+    subject: String,
+    body: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use lettre::{
+        message::header::ContentType,
+        message::Mailbox,
+        transport::smtp::authentication::{Credentials, Mechanism},
+        transport::smtp::client::{Tls, TlsParameters},
+        Message, SmtpTransport, Transport,
+    };
+    use users::{get_user_by_name, os::unix::UserExt};
+    use std::fs;
+
+    // Resolve recipient from user config
+    let user = get_user_by_name(target_username)
+        .ok_or(NotificationError::UserNotFoundError(target_username.to_owned()))?;
+    let user_config_path = user.home_dir().join(".config/workspaces.toml");
+    let toml_str = fs::read_to_string(user_config_path)?;
+    let user_config: crate::config::UserConfig = toml::from_str(&toml_str)?;
+
+    // Build SMTP transport (same rules as elsewhere)
+    let creds = Credentials::new(
+        smtp_config.username.to_owned(),
+        smtp_config.password.to_owned(),
+    );
+    let (relay_host, relay_port) = split_host_port(&smtp_config.relay);
+    let mut builder = SmtpTransport::relay(relay_host)?;
+
+    let tls_mode = smtp_config.tls.unwrap_or(crate::config::TlsMode::Starttls);
+    match (tls_mode, relay_port) {
+        (crate::config::TlsMode::Wrapper, Some(p)) => {
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(p).tls(Tls::Wrapper(params));
+        }
+        (crate::config::TlsMode::Wrapper, None) => {
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(465).tls(Tls::Wrapper(params));
+        }
+        (crate::config::TlsMode::Starttls, Some(p)) => {
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(p).tls(Tls::Required(params));
+        }
+        (crate::config::TlsMode::Starttls, None) => {
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.tls(Tls::Required(params));
+        }
+    }
+
+    if let Some(method) = smtp_config.auth {
+        let mech = match method {
+            crate::config::AuthMethod::Plain => Mechanism::Plain,
+            crate::config::AuthMethod::Login => Mechanism::Login,
+        };
+        builder = builder.authentication(vec![mech]);
+    }
+    let mailer = builder.credentials(creds).build();
+
+    // From: explicit [smtp].from if set, else username parsed as email
+    let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
+        mb
+    } else {
+        smtp_config.username.parse().map_err(NotificationError::MailboxParseError)?
+    };
+
+    let msg = Message::builder()
+        .from(from_mailbox)
+        .to(user_config.email.clone())
+        .header(ContentType::TEXT_PLAIN)
+        .subject(subject)
+        .body(body)?;
+
+    mailer.send(&msg)?;
     Ok(())
 }
