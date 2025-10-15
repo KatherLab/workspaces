@@ -1,7 +1,7 @@
 use crate::{config, to_volume_string, zfs};
 use chrono::{DateTime, Duration, Local, Utc};
 use lettre::{
-    address::AddressError, message::header::ContentType,
+    address::AddressError, message::header::ContentType, message::Mailbox,
     transport::smtp::authentication::Credentials, Message, SmtpTransport, Transport,
 };
 use rusqlite::Connection;
@@ -171,6 +171,16 @@ fn notify_if_necessary_(
         .credentials(creds)
         .build();
 
+    // Determine the From: address
+    let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
+        mb
+    } else {
+        smtp_config
+            .username
+            .parse()
+            .map_err(NotificationError::MailboxParseError)?
+    };
+
     let last_notification_time = connection
         .prepare(
             "SELECT timestamp \
@@ -201,12 +211,7 @@ fn notify_if_necessary_(
         }) {
             // if not, we have to notify the user!
             let email = Message::builder()
-                .from(
-                    smtp_config
-                        .username
-                        .parse()
-                        .map_err(NotificationError::MailboxParseError)?,
-                )
+                .from(from_mailbox)
                 .to(user_config.email)
                 .header(ContentType::TEXT_PLAIN);
 

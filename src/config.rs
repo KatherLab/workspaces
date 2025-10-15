@@ -1,6 +1,7 @@
 use chrono::Duration;
 use lettre::message::Mailbox;
 use serde::de::{self, Unexpected};
+use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -96,6 +97,10 @@ pub struct SmtpConfig {
     pub relay: String,
     pub username: String,
     pub password: String,
+    /// Optional "From" address to use in notification emails.
+    /// If omitted, we'll fall back to using `username` (if it parses as an email).
+    #[serde(default, deserialize_with = "deserialize_opt_mailbox")]
+    pub from: Option<Mailbox>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,4 +117,17 @@ where
     email_str.parse().map_err(|_| {
         de::Error::invalid_value(Unexpected::Str(&email_str), &"a valid email address string")
     })
+}
+
+fn deserialize_opt_mailbox<'de, D>(deserializer: D) -> Result<Option<Mailbox>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let email_opt: Option<String> = Option::deserialize(deserializer)?;
+    match email_opt {
+        Some(s) => s.parse().map(Some).map_err(|_| {
+            de::Error::invalid_value(Unexpected::Str(&s), &"a valid email address string")
+        }),
+        None => Ok(None),
+    }
 }

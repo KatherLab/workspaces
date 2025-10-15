@@ -34,3 +34,13 @@ expiry_notifications = [-29, -25, -20, -10, 0, 7, 14]
 ##
 ## Workspaces cannot be created or extended on disabled filesystems.
 #disabled = false
+
+[smtp]
+relay = "smtp.example.org"
+# If your SMTP login has a backslash, either:
+username = 'DOMAIN\svc-workspaces'   # literal string (no escaping)
+# ...or...
+# username = "DOMAIN\\svc-workspaces" # basic string (escape the backslash)
+password = "supersecret"
+# New (optional): use a different visible sender address
+from = "Workspaces Notifier <workspaces-noreply@example.org>"
