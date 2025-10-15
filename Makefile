@@ -2,7 +2,8 @@
 
 BIN = target/release/workspaces
 
-$(BIN): src/main.rs src/cli.rs src/config.rs src/zfs.rs
+$(BIN): src/extend.rs src/maintain.rs src/config.rs src/main.rs src/create.rs src/db_schema.rs \
+		src/rename.rs src/expire.rs src/cli.rs src/zfs.rs src/filesystems.rs src/list.rs
 	cargo build --release
 
 install: $(BIN)
@@ -12,10 +13,9 @@ install: $(BIN)
 	# copy config
 	mkdir -p /etc/workspaces
 	cp workspaces.toml /etc/workspaces/workspaces.example.toml
-	test -e /etc/workspaces/workspaces.toml || cp workspaces.toml /etc/workspaces/
+	test -e /etc/workspaces/workspaces.toml || install -m 0600 workspaces.toml /etc/workspaces/
 	# make database dir
 	mkdir -p /usr/local/lib/workspaces
 	# install systemd service / timer
-	cp clean-workspaces.service /etc/systemd/system/
-	cp clean-workspaces.timer /etc/systemd/system/
-	systemctl daemon-reload
+	cp maintain-workspaces.service /etc/systemd/system/
+	cp maintain-workspaces.timer /etc/systemd/system/

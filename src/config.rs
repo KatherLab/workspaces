@@ -1,4 +1,6 @@
 use chrono::Duration;
+use lettre::message::Mailbox;
+use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6,25 +8,47 @@ use std::path::PathBuf;
 /// Path of the configuration file
 pub const CONFIG_PATH: &str = "/etc/workspaces/workspaces.toml";
 
+/// TLS mode for SMTP
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TlsMode {
+    /// Submission with STARTTLS (typically port 587)
+    Starttls,
+    /// Implicit/wrapper TLS (typically port 465)
+    Wrapper,
+}
+
+/// Preferred SMTP auth mechanism (optional). If unset, we auto-negotiate.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMethod {
+    Plain,
+    Login,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    /// Default filesystem to use in CLI
-    pub default_filesystem: Option<String>,
     /// Workspaces database location
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
+
+    #[serde(default)]
+    pub smtp: Option<SmtpConfig>,
+
+    /// Default filesystem to use in CLI
+    pub default_filesystem: Option<String>,
     /// Workspace filesystem definitions
     #[serde(default)]
     pub filesystems: HashMap<String, Filesystem>,
 }
 
 fn default_db_path() -> PathBuf {
-    // The >=v0.3 default location.  If such a file exist, we are going to take this one
+    // The >=v0.3 default location. If such a file exist, we are going to take this one
     let path = PathBuf::from("/usr/local/lib/workspaces/workspaces.db");
     if path.exists() {
         return path;
     }
-    // v0.2 database location.  We'll take this one if it exists
+    // v0.2 database location. We'll take this one if it exists
     let path = PathBuf::from("/usr/local/share/workspaces/workspaces.db");
     if path.exists() {
         eprintln!(
@@ -40,17 +64,29 @@ fn default_db_path() -> PathBuf {
     PathBuf::from("/usr/local/lib/workspaces/workspaces.db")
 }
 
-/// A filesystem workpsaces can be created in
+/// A filesystem workspaces can be created in
 #[derive(Debug, Deserialize)]
 pub struct Filesystem {
     /// ZFS filesystem / volume which will act as the root for the datasets
     pub root: String,
+
     /// Maximum number of days a workspace may exist
     #[serde(deserialize_with = "from_days")]
     pub max_duration: Duration,
     /// Days after which an expired dataset will be removed
     #[serde(deserialize_with = "from_days")]
     pub expired_retention: Duration,
+
+    /// Days relative to the expiration time the user will be notified.
+    /// Negative durations will lead to messages being sent after expiry,
+    /// but before deletion.
+    #[serde(default = "Vec::new", deserialize_with = "from_days_list")]
+    pub expiry_notifications_on_days: Vec<Duration>,
+
+    /// Snapshot
+    #[serde(default)]
+    pub snapshot: bool,
+
     /// Whether datasets can be created / extended
     #[serde(default)]
     pub disabled: bool,
@@ -62,4 +98,59 @@ where
 {
     let days: i64 = Deserialize::deserialize(deserializer)?;
     Ok(Duration::days(days))
+}
+
+fn from_days_list<'de, D>(deserializer: D) -> Result<Vec<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut days: Vec<i64> = Deserialize::deserialize(deserializer)?;
+    days.sort();
+    Ok(days.iter().map(|days| Duration::days(*days)).collect())
+}
+
+#[derive(Deserialize, Debug)]
+pub struct SmtpConfig {
+    pub relay: String,
+    pub username: String,
+    pub password: String,
+    /// Optional visible From address. If omitted, falls back to `username`
+    /// (which must parse as an email address).
+    #[serde(default, deserialize_with = "deserialize_opt_mailbox")]
+    pub from: Option<Mailbox>,
+    /// Optional TLS mode ("starttls" or "wrapper"). Default: "starttls".
+    #[serde(default)]
+    pub tls: Option<TlsMode>,
+    /// Optional auth mechanism override ("plain" or "login"); default: auto-negotiate.
+    #[serde(default)]
+    pub auth: Option<AuthMethod>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserConfig {
+    #[serde(deserialize_with = "deserialize_mailbox")]
+    pub email: Mailbox,
+}
+
+fn deserialize_mailbox<'de, D>(deserializer: D) -> Result<Mailbox, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let email_str: String = Deserialize::deserialize(deserializer)?;
+    email_str.parse().map_err(|_| {
+        de::Error::invalid_value(Unexpected::Str(&email_str), &"a valid email address string")
+    })
+}
+
+fn deserialize_opt_mailbox<'de, D>(deserializer: D) -> Result<Option<Mailbox>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let email_opt: Option<String> = Option::deserialize(deserializer)?;
+    match email_opt {
+        Some(s) => s.parse().map(Some).map_err(|_| {
+            de::Error::invalid_value(Unexpected::Str(&s), &"a valid email address string")
+        }),
+        None => Ok(None),
+    }
 }
