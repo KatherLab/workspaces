@@ -8,6 +8,14 @@ use std::path::PathBuf;
 /// Path of the configuration file
 pub const CONFIG_PATH: &str = "/etc/workspaces/workspaces.toml";
 
+/// Preferred SMTP auth mechanism (optional). If unset, we auto-negotiate.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMethod {
+    Plain,
+    Login,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     /// Workspaces database location
@@ -96,10 +104,13 @@ pub struct SmtpConfig {
     pub relay: String,
     pub username: String,
     pub password: String,
-    /// Optional "From" address to use in notification emails.
-    /// If omitted, we'll fall back to using `username` (if it parses as an email).
+    /// Optional visible From address. If omitted, falls back to `username`
+    /// (which must parse as an email address).
     #[serde(default, deserialize_with = "deserialize_opt_mailbox")]
     pub from: Option<Mailbox>,
+    /// Optional auth mechanism override ("plain" or "login"); default: auto-negotiate.
+    #[serde(default)]
+    pub auth: Option<AuthMethod>,
 }
 
 #[derive(Debug, Deserialize)]

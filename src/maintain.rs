@@ -1,8 +1,11 @@
 use crate::{config, to_volume_string, zfs};
 use chrono::{DateTime, Duration, Local, Utc};
 use lettre::{
-    address::AddressError, message::header::ContentType, message::Mailbox,
-    transport::smtp::authentication::Credentials, Message, SmtpTransport, Transport,
+    address::AddressError,
+    message::header::ContentType,
+    message::Mailbox,
+    transport::smtp::authentication::{Credentials, Mechanism},
+    Message, SmtpTransport, Transport,
 };
 use rusqlite::Connection;
 use std::{collections::HashMap, error::Error, fmt, fs, io};
@@ -142,6 +145,26 @@ impl From<AddressError> for NotificationError {
     }
 }
 
+/// Parses "host", "host:port", or "[IPv6]:port" into (host, Some(port)) or (host, None)
+fn split_host_port(input: &str) -> (&str, Option<u16>) {
+    if let Some(rest) = input.strip_prefix('[') {
+        if let Some(idx) = rest.find("]:") {
+            let host = &rest[..idx];
+            let port_str = &rest[idx + 2..];
+            if let Ok(port) = port_str.parse::<u16>() {
+                return (host, Some(port));
+            }
+            return (host, None);
+        }
+    }
+    if let Some((host, port_str)) = input.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            return (host, Some(port));
+        }
+    }
+    (input, None)
+}
+
 fn notify_if_necessary_(
     workspace_id: i32,
     workspace_name: &str,
@@ -166,20 +189,21 @@ fn notify_if_necessary_(
         smtp_config.password.to_owned(),
     );
 
-    let mailer = SmtpTransport::relay(&smtp_config.relay)
-        .map_err(NotificationError::SmtpError)?
-        .credentials(creds)
-        .build();
-
-    // Determine the From: address
-    let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
-        mb
-    } else {
-        smtp_config
-            .username
-            .parse()
-            .map_err(NotificationError::MailboxParseError)?
-    };
+    // Support relay as "host" or "host:port" (and "[IPv6]:port")
+    let (relay_host, relay_port) = split_host_port(&smtp_config.relay);
+    let mut builder = SmtpTransport::relay(relay_host).map_err(NotificationError::SmtpError)?;
+    if let Some(p) = relay_port {
+        builder = builder.port(p);
+    }
+    // Optional auth mechanism override
+    if let Some(method) = smtp_config.auth {
+        let mech = match method {
+            config::AuthMethod::Plain => Mechanism::Plain,
+            config::AuthMethod::Login => Mechanism::Login,
+        };
+        builder = builder.authentication(mech);
+    }
+    let mailer = builder.credentials(creds).build();
 
     let last_notification_time = connection
         .prepare(
@@ -210,6 +234,15 @@ fn notify_if_necessary_(
                     - *duration_from_expiry_when_notification_should_have_been_issued)
         }) {
             // if not, we have to notify the user!
+            let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
+                mb
+            } else {
+                smtp_config
+                    .username
+                    .parse()
+                    .map_err(NotificationError::MailboxParseError)?
+            };
+
             let email = Message::builder()
                 .from(from_mailbox)
                 .to(user_config.email)
@@ -231,17 +264,24 @@ fn notify_if_necessary_(
                 )
             };
 
-            let email = email.subject(&subject).body(
-                format!(
-                    "{}\n\nYou can extend it by logging into {} and running\n`workspaces extend -d <duration in days> {}`.\n\n\
-                    To disable notifications for this workspace, manually mark this workspace as expired by running\n\
+            let email = email
+                .subject(&subject)
+                .body(format!(
+                    "{}
+
+You can extend it by logging into {} and running
+`workspaces extend -d <duration in days> {}`.
+
+\
+                    To disable notifications for this workspace, manually mark this workspace as expired by running
+\
                     `workspaces expire {}`.",
                     &subject,
                     hostname::get()?.to_string_lossy(),
                     workspace_name,
                     workspace_name,
-                )
-            ).unwrap();
+                ))
+                .unwrap();
 
             mailer.send(&email).map_err(NotificationError::SmtpError)?;
             connection
@@ -254,7 +294,6 @@ fn notify_if_necessary_(
     }
     Ok(())
 }
-
 
 /// Admin-only: send a one-off test email using SMTP config.
 /// If `to_override` is Some, send to that address; otherwise look up the
@@ -281,7 +320,20 @@ pub fn notify_test(
         smtp_config.username.to_owned(),
         smtp_config.password.to_owned(),
     );
-    let mailer = SmtpTransport::relay(&smtp_config.relay)?.credentials(creds).build();
+    let (relay_host, relay_port) = split_host_port(&smtp_config.relay);
+    let mut builder = SmtpTransport::relay(relay_host)?;
+    if let Some(p) = relay_port {
+        builder = builder.port(p);
+    }
+    if let Some(method) = smtp_config.auth {
+        let mech = match method {
+            config::AuthMethod::Plain => Mechanism::Plain,
+            config::AuthMethod::Login => Mechanism::Login,
+        };
+        builder = builder.authentication(mech);
+    }
+    let mailer = builder.credentials(creds).build();
+
     // Determine From
     let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
         mb
@@ -292,7 +344,6 @@ pub fn notify_test(
             Err(e) => return Err(Box::new(e)),
         }
     };
-
 
     let host = hostname::get()?.to_string_lossy().to_string();
     let subject = format!("Workspaces test email from {}", host);
