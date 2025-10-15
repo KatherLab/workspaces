@@ -286,12 +286,13 @@ pub fn notify_test(
     let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
         mb
     } else {
-        smtp_config.username.parse().map_err(|e| {
-            let _ = e;
-            // Surface a clear error when username is not an email and no `from` is set
-            AddressError::InvalidMailbox
-        })?
+        match smtp_config.username.parse() {
+            Ok(mb) => mb,
+            // Propagate the real parse error if username isn't an email
+            Err(e) => return Err(Box::new(e)),
+        }
     };
+
 
     let host = hostname::get()?.to_string_lossy().to_string();
     let subject = format!("Workspaces test email from {}", host);
