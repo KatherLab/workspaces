@@ -5,7 +5,7 @@ use lettre::{
     message::header::ContentType,
     message::Mailbox,
     transport::smtp::authentication::{Credentials, Mechanism},
-    transport::smtp::client::Tls,
+    transport::smtp::client::{Tls, TlsParameters},
     Message, SmtpTransport, Transport,
 };
 use rusqlite::Connection;
@@ -94,6 +94,8 @@ enum NotificationError {
     UserConfigParseError(toml::de::Error),
     SmtpError(lettre::transport::smtp::Error),
     MailboxParseError(AddressError),
+    /// Failed to build TLS parameters for the given relay host
+    TlsParametersInvalid(String),
 }
 
 impl std::error::Error for NotificationError {
@@ -104,6 +106,7 @@ impl std::error::Error for NotificationError {
             Self::UserConfigParseError(err) => Some(err),
             Self::SmtpError(err) => Some(err),
             Self::MailboxParseError(err) => Some(err),
+            Self::TlsParametersInvalid(..) => None,
         }
     }
 }
@@ -118,6 +121,11 @@ impl std::fmt::Display for NotificationError {
             }
             Self::SmtpError(err) => write!(f, "SMTP error: {}", err),
             Self::MailboxParseError(err) => write!(f, "Mailbox parse error: {}", err),
+            Self::TlsParametersInvalid(host) => write!(
+                f,
+                "TLS parameters could not be constructed for relay host: {}",
+                host
+            ),
         }
     }
 }
@@ -198,15 +206,21 @@ fn notify_if_necessary_(
     let tls_mode = smtp_config.tls.unwrap_or(config::TlsMode::Starttls);
     match (tls_mode, relay_port) {
         (config::TlsMode::Wrapper, Some(p)) => {
-            builder = builder.port(p).tls(Tls::Wrapper);
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(p).tls(Tls::Wrapper(params));
         }
         (config::TlsMode::Wrapper, None) => {
-            builder = builder.port(465).tls(Tls::Wrapper);
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(465).tls(Tls::Wrapper(params));
         }
         (config::TlsMode::Starttls, Some(p)) => {
             builder = builder.port(p); // STARTTLS is relay() default
         }
-        (config::TlsMode::Starttls, None) => {} // default: 587 + STARTTLS
+        (config::TlsMode::Starttls, None) => {
+            // default: 587 + STARTTLS (already configured by relay())
+        }
     }
 
     // Optional auth mechanism override
@@ -337,20 +351,26 @@ pub fn notify_test(
     );
     let (relay_host, relay_port) = split_host_port(&smtp_config.relay);
     let mut builder = SmtpTransport::relay(relay_host)?;
+
     // TLS mode: mirror the logic above
     let tls_mode = smtp_config.tls.unwrap_or(config::TlsMode::Starttls);
     match (tls_mode, relay_port) {
         (config::TlsMode::Wrapper, Some(p)) => {
-            builder = builder.port(p).tls(Tls::Wrapper);
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(p).tls(Tls::Wrapper(params));
         }
         (config::TlsMode::Wrapper, None) => {
-            builder = builder.port(465).tls(Tls::Wrapper);
+            let params = TlsParameters::new(relay_host.to_string())
+                .map_err(|_| NotificationError::TlsParametersInvalid(relay_host.to_string()))?;
+            builder = builder.port(465).tls(Tls::Wrapper(params));
         }
         (config::TlsMode::Starttls, Some(p)) => {
             builder = builder.port(p);
         }
         (config::TlsMode::Starttls, None) => {}
     }
+
     if let Some(method) = smtp_config.auth {
         let mech = match method {
             config::AuthMethod::Plain => Mechanism::Plain,
