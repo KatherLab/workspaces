@@ -254,3 +254,61 @@ fn notify_if_necessary_(
     }
     Ok(())
 }
+
+
+/// Admin-only: send a one-off test email using SMTP config.
+/// If `to_override` is Some, send to that address; otherwise look up the
+/// target user's `~/.config/workspaces.toml` (UserConfig.email).
+pub fn notify_test(
+    target_username: &str,
+    to_override: Option<String>,
+    smtp_config: &config::SmtpConfig,
+) -> Result<(), Box<dyn Error>> {
+    // Resolve recipient
+    let to_mailbox: Mailbox = if let Some(to) = to_override {
+        to.parse().map_err(NotificationError::MailboxParseError)?
+    } else {
+        let user = get_user_by_name(target_username)
+            .ok_or(NotificationError::UserNotFoundError(target_username.to_owned()))?;
+        let user_config_path = user.home_dir().join(".config/workspaces.toml");
+        let toml_str = fs::read_to_string(user_config_path)?;
+        let user_config: config::UserConfig = toml::from_str(&toml_str)?;
+        user_config.email
+    };
+
+    // Build SMTP transport
+    let creds = Credentials::new(
+        smtp_config.username.to_owned(),
+        smtp_config.password.to_owned(),
+    );
+    let mailer = SmtpTransport::relay(&smtp_config.relay)?.credentials(creds).build();
+    // Determine From
+    let from_mailbox: Mailbox = if let Some(mb) = smtp_config.from.clone() {
+        mb
+    } else {
+        smtp_config.username.parse().map_err(|e| {
+            let _ = e;
+            // Surface a clear error when username is not an email and no `from` is set
+            AddressError::InvalidMailbox
+        })?
+    };
+
+    let host = hostname::get()?.to_string_lossy().to_string();
+    let subject = format!("Workspaces test email from {}", host);
+    let body = format!(
+        "Hello,\n\nThis is a test email sent by Workspaces on {}.\n\
+If you can read this, SMTP is configured correctly.\n",
+        host
+    );
+
+    let msg = Message::builder()
+        .from(from_mailbox)
+        .to(to_mailbox.clone())
+        .header(ContentType::TEXT_PLAIN)
+        .subject(subject)
+        .body(body)?;
+
+    mailer.send(&msg)?;
+    println!("Sent test email to {}", to_mailbox);
+    Ok(())
+}

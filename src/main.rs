@@ -13,6 +13,7 @@ use std::{
     collections::HashMap, error::Error, fs, os::unix::fs::MetadataExt, path::Path, process,
     time::Duration,
 };
+use users::get_current_uid;
 
 mod cli;
 mod config;
@@ -171,6 +172,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         cli::Command::Filesystems { output } => filesystems(&config.filesystems, output),
         cli::Command::Maintain => maintain(&mut conn, &config.filesystems, &config.smtp),
+        cli::Command::NotifyTest { user, to } => {
+            // Admins only
+            if get_current_uid() != 0 {
+                eprintln!("You are not allowed to execute this operation");
+                process::exit(ExitCodes::InsufficientPrivileges as i32);
+            }
+            // Require SMTP configuration
+            let Some(smtp_cfg) = config.smtp.as_ref() else {
+                eprintln!(
+                    "SMTP is not configured. Please add an [smtp] block in {}",
+                    config::CONFIG_PATH
+                );
+                process::exit(1);
+            };
+            maintain::notify_test(&user, to, smtp_cfg)
+        }
     }
 }
 

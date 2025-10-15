@@ -136,6 +136,22 @@ pub enum Command {
     /// Snapshots will be created.
     /// Notification emails may be sent.
     Maintain,
+    /// Send a one-off test notification email (admins only)
+    NotifyTest {
+        /// User whose ~/.config/workspaces.toml holds the recipient email
+        ///
+        /// Use --to to override and send to an arbitrary address.
+        #[arg(short, long, default_value_t = get_current_username().unwrap().to_string_lossy().to_string(), value_parser = parse_pathsafe)]
+        user: String,
+
+        /// Explicit recipient email address (overrides user's config)
+        ///
+        /// Example: "Workspaces Admin <admin@example.org>"
+        /// If omitted, we read the user's ~/.config/workspaces.toml
+        /// (the `email = "..."` field).
+        #[arg(long = "to")]
+        to: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
