@@ -233,7 +233,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
         }
         cli::Command::Filesystems { output } => filesystems(&config.filesystems, output),
-        cli::Command::Maintain => maintain(&mut conn, &config.filesystems, &config.smtp),
+        cli::Command::Maintain => {
+            // Admins only
+            if get_current_uid() != 0 {
+                eprintln!("You are not allowed to execute this operation");
+                process::exit(ExitCodes::InsufficientPrivileges as i32);
+            }
+
+            maintain(&mut conn, &config.filesystems, &config.smtp)
+        }
+
         cli::Command::NotifyTest { user, to } => {
             // Warn for target user
             warn_missing_email_for_user(&user);
