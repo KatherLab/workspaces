@@ -41,6 +41,7 @@ expiry_notifications = [-29, -25, -20, -10, 0, 7, 14]
 ## Recommended: submit via port 587 with STARTTLS (same as Thunderbird).
 ## - `relay` can be "host" or "host:port" (also supports "[IPv6]:port").
 ## - If `from` is omitted, `username` must be a valid email address and will be used as the sender.
+## - `tls` is optional; "starttls" (default) or "wrapper" (implicit TLS on 465).
 ## - `auth` is optional; set to "login" or "plain" to force a mechanism, otherwise it auto-negotiates.
 ## - Usernames with backslashes: either use single-quoted literal strings (no escaping)
 ##   or escape the backslash in double quotes.
@@ -61,6 +62,12 @@ expiry_notifications = [-29, -25, -20, -10, 0, 7, 14]
 ## Optional visible From address; set this if your login is NOT a valid email or
 ## if you want a nicer sender display. If omitted, falls back to `username`.
 #from = "Workspaces Notifier <workspaces-noreply@example.org>"
+
+## Optional TLS mode: "starttls" (default) for port 587, or "wrapper" for implicit TLS (port 465).
+#tls = "starttls"
+## If using wrapper/implicit TLS, you can also set:
+## #relay = "smtp.example.org:465"
+## #tls = "wrapper"
 
 ## Optional: force the auth mechanism. Allowed values: "login", "plain".
 ## If unset, the client will auto-negotiate.

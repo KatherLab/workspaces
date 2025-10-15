@@ -8,6 +8,16 @@ use std::path::PathBuf;
 /// Path of the configuration file
 pub const CONFIG_PATH: &str = "/etc/workspaces/workspaces.toml";
 
+/// TLS mode for SMTP
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TlsMode {
+    /// Submission with STARTTLS (typically port 587)
+    Starttls,
+    /// Implicit/wrapper TLS (typically port 465)
+    Wrapper,
+}
+
 /// Preferred SMTP auth mechanism (optional). If unset, we auto-negotiate.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,12 +43,12 @@ pub struct Config {
 }
 
 fn default_db_path() -> PathBuf {
-    // The >=v0.3 default location.  If such a file exist, we are going to take this one
+    // The >=v0.3 default location. If such a file exist, we are going to take this one
     let path = PathBuf::from("/usr/local/lib/workspaces/workspaces.db");
     if path.exists() {
         return path;
     }
-    // v0.2 database location.  We'll take this one if it exists
+    // v0.2 database location. We'll take this one if it exists
     let path = PathBuf::from("/usr/local/share/workspaces/workspaces.db");
     if path.exists() {
         eprintln!(
@@ -108,6 +118,9 @@ pub struct SmtpConfig {
     /// (which must parse as an email address).
     #[serde(default, deserialize_with = "deserialize_opt_mailbox")]
     pub from: Option<Mailbox>,
+    /// Optional TLS mode ("starttls" or "wrapper"). Default: "starttls".
+    #[serde(default)]
+    pub tls: Option<TlsMode>,
     /// Optional auth mechanism override ("plain" or "login"); default: auto-negotiate.
     #[serde(default)]
     pub auth: Option<AuthMethod>,

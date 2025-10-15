@@ -5,6 +5,7 @@ use lettre::{
     message::header::ContentType,
     message::Mailbox,
     transport::smtp::authentication::{Credentials, Mechanism},
+    transport::smtp::client::Tls,
     Message, SmtpTransport, Transport,
 };
 use rusqlite::Connection;
@@ -44,8 +45,8 @@ pub fn maintain(
                 ) {
                     user_error @ Err(
                         NotificationError::UserConfigReadError(..)
-                        | NotificationError::UserConfigParseError(..)
-                        | NotificationError::MailboxParseError(..),
+                            | NotificationError::UserConfigParseError(..)
+                            | NotificationError::MailboxParseError(..),
                     ) => {
                         eprintln!("User error while notifying {}: {:?}", username, user_error);
                     }
@@ -192,14 +193,31 @@ fn notify_if_necessary_(
     // Support relay as "host" or "host:port" (and "[IPv6]:port")
     let (relay_host, relay_port) = split_host_port(&smtp_config.relay);
     let mut builder = SmtpTransport::relay(relay_host).map_err(NotificationError::SmtpError)?;
-    if let Some(p) = relay_port {
-        builder = builder.port(p);
+
+    // TLS mode: default STARTTLS; if WRAPPER and no port given, default to 465
+    let tls_mode = smtp_config.tls.unwrap_or(config::TlsMode::Starttls);
+    match (tls_mode, relay_port) {
+        (config::TlsMode::Wrapper, Some(p)) => {
+            builder = builder.port(p).tls(Tls::Wrapper);
+        }
+        (config::TlsMode::Wrapper, None) => {
+            builder = builder.port(465).tls(Tls::Wrapper);
+        }
+        (config::TlsMode::Starttls, Some(p)) => {
+            builder = builder.port(p); // STARTTLS is relay() default
+        }
+        (config::TlsMode::Starttls, None) => {} // default: 587 + STARTTLS
     }
+
     // Optional auth mechanism override
     if let Some(method) = smtp_config.auth {
-        let mech = match method { config::AuthMethod::Plain => Mechanism::Plain, config::AuthMethod::Login => Mechanism::Login };
+        let mech = match method {
+            config::AuthMethod::Plain => Mechanism::Plain,
+            config::AuthMethod::Login => Mechanism::Login,
+        };
         builder = builder.authentication(vec![mech]);
     }
+
     let mailer = builder.credentials(creds).build();
 
     let last_notification_time = connection
@@ -319,11 +337,25 @@ pub fn notify_test(
     );
     let (relay_host, relay_port) = split_host_port(&smtp_config.relay);
     let mut builder = SmtpTransport::relay(relay_host)?;
-    if let Some(p) = relay_port {
-        builder = builder.port(p);
+    // TLS mode: mirror the logic above
+    let tls_mode = smtp_config.tls.unwrap_or(config::TlsMode::Starttls);
+    match (tls_mode, relay_port) {
+        (config::TlsMode::Wrapper, Some(p)) => {
+            builder = builder.port(p).tls(Tls::Wrapper);
+        }
+        (config::TlsMode::Wrapper, None) => {
+            builder = builder.port(465).tls(Tls::Wrapper);
+        }
+        (config::TlsMode::Starttls, Some(p)) => {
+            builder = builder.port(p);
+        }
+        (config::TlsMode::Starttls, None) => {}
     }
     if let Some(method) = smtp_config.auth {
-        let mech = match method { config::AuthMethod::Plain => Mechanism::Plain, config::AuthMethod::Login => Mechanism::Login };
+        let mech = match method {
+            config::AuthMethod::Plain => Mechanism::Plain,
+            config::AuthMethod::Login => Mechanism::Login,
+        };
         builder = builder.authentication(vec![mech]);
     }
     let mailer = builder.credentials(creds).build();
