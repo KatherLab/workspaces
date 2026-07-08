@@ -99,6 +99,33 @@ pub enum Command {
         #[arg(short, long = "filesystem", value_name = "FILESYSTEM")]
         filesystem_name: Option<String>,
     },
+    /// Share a workspace with another user via POSIX ACLs
+    #[clap(alias = "sh")]
+    Share {
+        /// Name of the workspace
+        #[arg(value_parser = parse_pathsafe)]
+        name: String,
+
+        /// User to share with (or revoke access from)
+        #[arg(value_parser = parse_pathsafe)]
+        other_user: String,
+
+        /// Grant read-write access (default is read-only)
+        #[arg(short, long)]
+        read_write: bool,
+
+        /// Revoke the other user's access instead of granting it
+        #[arg(short, long)]
+        revoke: bool,
+
+        /// User the workspace belongs to
+        #[arg(short, long, default_value_t = get_current_username().unwrap().to_string_lossy().to_string(), value_parser = parse_pathsafe)]
+        user: String,
+
+        /// Filesystem of the workspace
+        #[arg(short, long = "filesystem", value_name = "FILESYSTEM")]
+        filesystem_name: Option<String>,
+    },
     /// Expire a workspace
     Expire {
         /// Name of the workspace
@@ -168,6 +195,8 @@ pub enum WorkspacesColumns {
     Expiry,
     /// Mountpoint of the workspace
     Mountpoint,
+    /// Users the workspace has been shared with
+    Shares,
 }
 
 impl fmt::Display for WorkspacesColumns {
@@ -182,6 +211,7 @@ impl fmt::Display for WorkspacesColumns {
                 WorkspacesColumns::Size => "SIZE",
                 WorkspacesColumns::Expiry => "EXPIRY",
                 WorkspacesColumns::Mountpoint => "MOUNTPOINT",
+                WorkspacesColumns::Shares => "SHARES",
             }
         )
     }

@@ -60,6 +60,27 @@ pub const UPDATE_DB: &[fn(&mut Connection) -> Result<(), Box<dyn Error>>] = &[
         transaction.pragma_update(None, "user_version", 2)?;
         Ok(transaction.commit()?)
     },
+    |conn| {
+        let transaction = conn.transaction()?;
+
+        // Table tracking which users a workspace has been shared with.
+        // `read_write` is 0 for read-only and 1 for read-write access.
+        // ON DELETE CASCADE: shares disappear automatically when the
+        // workspace row is deleted (e.g. during `maintain`).
+        transaction.execute(
+            "CREATE TABLE shares( \
+                workspace_id INTEGER  NOT NULL, \
+                user         TEXT     NOT NULL, \
+                read_write   INTEGER  NOT NULL, \
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE, \
+                UNIQUE(workspace_id, user) \
+            )",
+            (),
+        )?;
+
+        transaction.pragma_update(None, "user_version", 3)?;
+        Ok(transaction.commit()?)
+    },
 ];
 
 pub const NEWEST_DB_VERSION: usize = UPDATE_DB.len();

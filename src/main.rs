@@ -25,6 +25,7 @@ mod filesystems;
 mod list;
 mod maintain;
 mod rename;
+mod share;
 mod zfs;
 
 enum ExitCodes {
@@ -214,6 +215,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &name,
                 &duration,
                 &config.smtp, // pass SMTP
+            )
+        }
+        cli::Command::Share {
+            filesystem_name,
+            name,
+            other_user,
+            read_write,
+            revoke,
+            user,
+        } => {
+            // Warn for target user
+            warn_missing_email_for_user(&user);
+
+            let filesystem_name = filesystem_or_default_or_exit(
+                &filesystem_name,
+                &config.filesystems,
+                &config.default_filesystem,
+            );
+            share::share(
+                &mut conn,
+                &filesystem_name,
+                &config
+                    .filesystems
+                    .get(&filesystem_name)
+                    .expect("unknown filesystem"),
+                &user,
+                &name,
+                &other_user,
+                read_write,
+                revoke,
             )
         }
         // Correct single Expire arm

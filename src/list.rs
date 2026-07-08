@@ -8,10 +8,11 @@ use prettytable::{
 };
 use rusqlite::Connection;
 
-use crate::{cli, config, to_volume_string, zfs};
+use crate::{cli, config, share, to_volume_string, zfs};
 
 #[derive(Debug)]
 struct WorkspacesRow {
+    id: i64,
     filesystem_name: String,
     user: String,
     name: String,
@@ -34,6 +35,7 @@ pub fn list(
         WorkspacesColumns::Size,
         WorkspacesColumns::Expiry,
         WorkspacesColumns::Mountpoint,
+        WorkspacesColumns::Shares,
     ]);
 
     let mut table = Table::new();
@@ -48,13 +50,14 @@ pub fn list(
     ));
 
     let mut statement =
-        conn.prepare("SELECT filesystem, user, name, expiration_time FROM workspaces")?;
+        conn.prepare("SELECT id, filesystem, user, name, expiration_time FROM workspaces")?;
     let workspace_iter = statement.query_map([], |row| {
         Ok(WorkspacesRow {
-            filesystem_name: row.get(0)?,
-            user: row.get(1)?,
-            name: row.get(2)?,
-            expiration_time: row.get(3)?,
+            id: row.get(0)?,
+            filesystem_name: row.get(1)?,
+            user: row.get(2)?,
+            name: row.get(3)?,
+            expiration_time: row.get(4)?,
         })
     })?;
 
@@ -137,6 +140,9 @@ pub fn list(
                     ),
                     WorkspacesColumns::Mountpoint => {
                         Cell::new(mountpoint.as_ref().unwrap().to_str().unwrap())
+                    }
+                    WorkspacesColumns::Shares => {
+                        Cell::new(&share::shares_string(conn, workspace.id))
                     }
                 })
                 .collect(),

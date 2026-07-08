@@ -85,9 +85,12 @@ Use `workspaces list` to view all available workspaces:
 
 ```console
 $ workspaces list
-NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT
+NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT                       SHARES
 testws  mvantreeck  bulk  expires in  9d    0G  /mnt/bulk/mvantreeck/testws
 ```
+
+The `SHARES` column shows which other users a workspace has been shared with
+(for example `alice:ro, bob:rw`), or is blank if the workspace is private.
 
 ### Extending a Workspace
 
@@ -109,6 +112,36 @@ $ workspaces expire -f bulk testws
 
 The workspace becomes read-only and will be deleted automatically later.
 An email notification is sent when it’s marked expired or scheduled for deletion.
+
+### Sharing a Workspace
+
+You can grant another user access to one of your workspaces. By default they
+get **read-only** access; use `--read-write` to let them modify files too.
+
+```console
+$ workspaces share -f bulk testws alice          # read-only
+$ workspaces share -f bulk testws alice --read-write
+```
+
+To remove a user's access again:
+
+```console
+$ workspaces share -f bulk testws alice --revoke
+```
+
+Only the workspace's owner (or an admin) may share it.
+
+Access is granted via POSIX ACLs, so the underlying filesystem must have
+ACLs enabled. On ZFS this means each pool root must be set up once by an
+administrator:
+
+```console
+# must be run as root, once per pool
+$ sudo zfs set acltype=posixacl zpool/bulk
+```
+
+New files created in a shared workspace inherit the access automatically,
+so you don't need to re-share after adding data.
 
 ### Manually Running the Garbage Collector
 
