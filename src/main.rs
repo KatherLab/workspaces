@@ -146,9 +146,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args = cli::Args::parse();
 
-    // Warn for the invoking user on every CLI run
-    if let Some(me) = get_current_username() {
-        warn_missing_email_for_user(&me.to_string_lossy());
+    // Warn for the invoking user on every CLI run, but stay quiet in
+    // machine-readable modes (csv/json) so the output stays parseable.
+    if matches!(args.format, cli::OutputFormat::Table) {
+        if let Some(me) = get_current_username() {
+            warn_missing_email_for_user(&me.to_string_lossy());
+        }
     }
 
     let mut conn = Connection::open(&config.db_path).unwrap_or_else(|e| {

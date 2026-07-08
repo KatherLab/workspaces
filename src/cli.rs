@@ -11,7 +11,7 @@ pub struct Args {
     /// `table` (default) is the human-readable aligned table. `csv` and `json`
     /// are machine-readable and emit raw values (e.g. byte counts, ISO
     /// timestamps) instead of the human-friendly strings.
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Table)]
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Table, display_order = 999)]
     pub format: OutputFormat,
 
     #[command(subcommand)]
