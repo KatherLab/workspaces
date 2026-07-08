@@ -225,9 +225,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             revoke,
             user,
         } => {
-            // Warn for target user
-            warn_missing_email_for_user(&user);
-
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
                 &config.filesystems,

@@ -1,4 +1,4 @@
-use std::{error::Error, io, path::PathBuf, process};
+use std::{error::Error, path::PathBuf, process};
 
 use rusqlite::Connection;
 use users::{get_current_uid, get_current_username};
@@ -157,12 +157,18 @@ pub fn shares_string(conn: &Connection, workspace_id: i64) -> String {
 
 /// Run `setfacl` with the given arguments, returning an error on failure.
 fn run_setfacl(args: &[&str]) -> Result<(), Box<dyn Error>> {
-    let status = process::Command::new("setfacl").args(args).status()?;
+    let status = process::Command::new("setfacl")
+        .args(args)
+        .status()
+        .map_err(|e| {
+            format!(
+                "failed to run `setfacl` (is the `acl` package installed? \
+                 and is `acltype=posixacl` set on the dataset?): {}",
+                e
+            )
+        })?;
     if !status.success() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::Other,
-            format!("setfacl {:?} failed with status {}", args, status),
-        )));
+        return Err(format!("setfacl {:?} failed with status {}", args, status).into());
     }
     Ok(())
 }
@@ -170,12 +176,12 @@ fn run_setfacl(args: &[&str]) -> Result<(), Box<dyn Error>> {
 /// Run `find <root> -type d -exec setfacl ... {} +` to apply default ACLs to
 /// every directory beneath the workspace (so new files inherit access).
 fn run_find_setfacl(args: &[&str]) -> Result<(), Box<dyn Error>> {
-    let status = process::Command::new("find").args(args).status()?;
+    let status = process::Command::new("find")
+        .args(args)
+        .status()
+        .map_err(|e| format!("failed to run `find`: {}", e))?;
     if !status.success() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::Other,
-            format!("find/setfacl pass failed with status {}", status),
-        )));
+        return Err(format!("find/setfacl pass failed with status {}", status).into());
     }
     Ok(())
 }
