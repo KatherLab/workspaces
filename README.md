@@ -89,6 +89,34 @@ NAME    USER        FS    EXPIRY          SIZE  MOUNTPOINT                      
 testws  mvantreeck  bulk  expires in  9d    0G  /mnt/bulk/mvantreeck/testws
 ```
 
+### Machine-Readable Output
+
+The `list` and `filesystems` commands support a global `--format` flag for
+scripting:
+
+```console
+$ workspaces --format csv list
+$ workspaces --format json filesystems
+```
+
+`csv` emits an RFC 4180 header row followed by one record per line. `json`
+emits an array of objects. In both, values are raw rather than the
+human-friendly strings shown in the table — for example, sizes are given in
+**bytes** (`size_bytes`, `used_bytes`, ...) and the expiry is an
+[RFC 3339](https://datatracker.ietf.org/doc/html/rfc3339) timestamp (`expiry`),
+so a consumer can compute days-remaining or deletion status itself. A
+disabled filesystem has an empty `duration_days`. The `shares` field is an
+empty string / `null` when the workspace is private, otherwise a
+comma-separated list like `alice:ro, bob:rw`.
+
+Columns can be restricted with `-o` (repeatable); the selected columns
+determine the keys/fields in the machine-readable output too:
+
+```console
+$ workspaces --format json list -o name -o expiry
+[{"name":"testws","expiry":"2026-07-18T10:00:00+00:00"}]
+```
+
 The `SHARES` column shows which other users a workspace has been shared with
 (for example `alice:ro, bob:rw`), or is blank if the workspace is private.
 

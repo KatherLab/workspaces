@@ -6,8 +6,27 @@ use users::get_current_username;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
+    /// Output format for tabular commands (`list`, `filesystems`)
+    ///
+    /// `table` (default) is the human-readable aligned table. `csv` and `json`
+    /// are machine-readable and emit raw values (e.g. byte counts, ISO
+    /// timestamps) instead of the human-friendly strings.
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Output format for tabular commands
+#[derive(Clone, Debug, ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable aligned table
+    Table,
+    /// Comma-separated values, one record per line (RFC 4180 quoting)
+    Csv,
+    /// JSON array of objects
+    Json,
 }
 
 #[derive(Subcommand, Debug)]

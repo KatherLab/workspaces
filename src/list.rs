@@ -8,7 +8,7 @@ use prettytable::{
 };
 use rusqlite::Connection;
 
-use crate::{cli, config, share, to_volume_string, zfs};
+use crate::{cli, config, format, share, to_volume_string, zfs};
 
 #[derive(Debug)]
 struct WorkspacesRow {
@@ -25,6 +25,7 @@ pub fn list(
     filter_users: &Option<Vec<String>>,
     filter_filesystems: &Option<Vec<String>>,
     output: &Option<Vec<cli::WorkspacesColumns>>,
+    format: &cli::OutputFormat,
 ) -> Result<(), Box<dyn Error>> {
     use cli::WorkspacesColumns;
     // the default columns
@@ -38,17 +39,6 @@ pub fn list(
         WorkspacesColumns::Shares,
     ]);
 
-    let mut table = Table::new();
-    table.set_format(FormatBuilder::new().padding(0, 2).build());
-
-    // bold title row
-    table.set_titles(Row::new(
-        output
-            .iter()
-            .map(|h| Cell::new(&h.to_string()).with_style(Attr::Bold))
-            .collect(),
-    ));
-
     let mut statement =
         conn.prepare("SELECT id, filesystem, user, name, expiration_time FROM workspaces")?;
     let workspace_iter = statement.query_map([], |row| {
@@ -61,8 +51,81 @@ pub fn list(
         })
     })?;
 
-    for workspace in workspace_iter {
-        let workspace = workspace?;
+    // Collect all rows first: we need a stable order for CSV/JSON, and the
+    // prettytable path renders directly. Collecting once keeps them in sync.
+    let mut rows: Vec<WorkspacesRow> = workspace_iter.filter_map(Result::ok).collect();
+    rows.sort_by(|a, b| {
+        a.filesystem_name
+            .cmp(&b.filesystem_name)
+            .then(a.user.cmp(&b.user))
+            .then(a.name.cmp(&b.name))
+    });
+
+    // Machine-readable path: emit raw values (bytes, ISO timestamps, etc.)
+    if !matches!(format, cli::OutputFormat::Table) {
+        let mut records = Vec::with_capacity(rows.len());
+        for workspace in &rows {
+            if !filter_users
+                .as_ref()
+                .map_or(true, |us| us.contains(&workspace.user))
+                || !filter_filesystems
+                    .as_ref()
+                    .map_or(true, |fs| fs.contains(&workspace.filesystem_name))
+            {
+                continue;
+            }
+            let fs = &filesystems[&workspace.filesystem_name];
+            let volume = to_volume_string(&fs.root, &workspace.user, &workspace.name);
+            let referenced = zfs::get_property::<usize>(&volume, "referenced").ok();
+            let mountpoint = zfs::get_property::<PathBuf>(&volume, "mountpoint").ok();
+
+            let mut record = Vec::new();
+            for column in &output {
+                let field = match column {
+                    WorkspacesColumns::Name => {
+                        format::Field::new("name", &workspace.name)
+                    }
+                    WorkspacesColumns::User => format::Field::new("user", &workspace.user),
+                    WorkspacesColumns::Fs => format::Field::new("fs", &workspace.filesystem_name),
+                    WorkspacesColumns::Size => format::Field::new(
+                        "size_bytes",
+                        referenced.unwrap_or(0),
+                    ),
+                    WorkspacesColumns::Expiry => {
+                        format::Field::new("expiry", workspace.expiration_time.to_rfc3339())
+                    }
+                    WorkspacesColumns::Mountpoint => format::Field::new(
+                        "mountpoint",
+                        mountpoint
+                            .as_ref()
+                            .map(|m| m.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                    ),
+                    WorkspacesColumns::Shares => {
+                        format::Field::new("shares", share::shares_string(conn, workspace.id))
+                    }
+                };
+                record.push(field);
+            }
+            records.push(record);
+        }
+        format::write_records(format, &records)?;
+        return Ok(());
+    }
+
+    // Human-readable table path
+    let mut table = Table::new();
+    table.set_format(FormatBuilder::new().padding(0, 2).build());
+
+    // bold title row
+    table.set_titles(Row::new(
+        output
+            .iter()
+            .map(|h| Cell::new(&h.to_string()).with_style(Attr::Bold))
+            .collect(),
+    ));
+
+    for workspace in &rows {
         if !filter_users
             .as_ref()
             .map_or(true, |us| us.contains(&workspace.user))

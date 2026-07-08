@@ -22,6 +22,7 @@ mod db_schema;
 mod expire;
 mod extend;
 mod filesystems;
+mod format;
 mod list;
 mod maintain;
 mod rename;
@@ -197,6 +198,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             &filter_users,
             &filter_filesystems,
             &output,
+            &args.format,
         ),
         cli::Command::Rename {
             src_workspace_name,
@@ -306,7 +308,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &config.smtp, // pass SMTP
             )
         }
-        cli::Command::Filesystems { output } => filesystems(&config.filesystems, output),
+        cli::Command::Filesystems { output } => {
+            filesystems(&config.filesystems, output, &args.format)
+        }
         cli::Command::Maintain => {
             // Admins only
             if get_current_uid() != 0 {

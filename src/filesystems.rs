@@ -8,12 +8,13 @@ use prettytable::{
 
 use crate::{
     cli::{self, FilesystemsColumns},
-    config, zfs,
+    config, format, zfs,
 };
 
 pub fn filesystems(
     filesystems: &HashMap<String, config::Filesystem>,
     output: Option<Vec<cli::FilesystemsColumns>>,
+    format: &cli::OutputFormat,
 ) -> Result<(), Box<dyn Error>> {
     // the default columns
     let output = output.unwrap_or(vec![
@@ -25,6 +26,45 @@ pub fn filesystems(
         FilesystemsColumns::Retention,
     ]);
 
+    // Collect rows in a stable (name-sorted) order so CSV/JSON output is deterministic.
+    let mut entries: Vec<(&String, &config::Filesystem)> = filesystems.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    // Machine-readable path: emit raw values (bytes, days, disabled flag).
+    if !matches!(format, cli::OutputFormat::Table) {
+        let mut records = Vec::with_capacity(entries.len());
+        for (name, info) in &entries {
+            let used = zfs::get_property::<usize>(&info.root, "used")?;
+            let available = zfs::get_property::<usize>(&info.root, "available")?;
+            let total = used + available;
+
+            let mut record = Vec::new();
+            for column in &output {
+                let field = match column {
+                    FilesystemsColumns::Name => format::Field::new("name", name),
+                    FilesystemsColumns::Used => format::Field::new("used_bytes", used),
+                    FilesystemsColumns::Free => format::Field::new("free_bytes", available),
+                    FilesystemsColumns::Total => format::Field::new("total_bytes", total),
+                    FilesystemsColumns::Duration => {
+                        if info.disabled {
+                            format::Field::new("duration_days", "")
+                        } else {
+                            format::Field::new("duration_days", info.max_duration.num_days())
+                        }
+                    }
+                    FilesystemsColumns::Retention => {
+                        format::Field::new("retention_days", info.expired_retention.num_days())
+                    }
+                };
+                record.push(field);
+            }
+            records.push(record);
+        }
+        format::write_records(format, &records)?;
+        return Ok(());
+    }
+
+    // Human-readable table path
     let mut table = Table::new();
     table.set_format(FormatBuilder::new().padding(0, 2).build());
 
@@ -36,7 +76,7 @@ pub fn filesystems(
             .collect(),
     ));
 
-    for (name, info) in filesystems {
+    for (name, info) in &entries {
         let used = zfs::get_property::<usize>(&info.root, "used")?;
         let available = zfs::get_property::<usize>(&info.root, "available")?;
         let total = used + available;
