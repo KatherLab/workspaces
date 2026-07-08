@@ -100,18 +100,48 @@ fn warn_missing_email_for_user(username: &str) {
     }
 }
 
+/// Print a fatal configuration error and exit.
+///
+/// Used when the configuration file is missing, unreadable, or malformed.
+/// Emits a concise message asking the user to contact their system
+/// administrator, since these are problems the user cannot fix themselves.
+fn fatal_config_error(detail: &str) -> ! {
+    eprintln!(
+        "Error: {detail}\n\
+         \n\
+         Workspaces is not properly configured. Please contact your system administrator."
+    );
+    process::exit(1);
+}
+
+/// Print a fatal database error and exit.
+///
+/// Used when the database cannot be opened, e.g. because the disk is full
+/// or the database file is missing/corrupted.
+fn fatal_db_error(detail: &str) -> ! {
+    eprintln!(
+        "Error: {detail}\n\
+         \n\
+         The workspaces database could not be opened. Please contact your system administrator."
+    );
+    process::exit(1);
+}
+
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Read config
-    let config_file =
-        fs::File::open(config::CONFIG_PATH).expect("could not find configuration file");
+    let config_file = fs::File::open(config::CONFIG_PATH).unwrap_or_else(|e| {
+        fatal_config_error(&format!("could not open configuration file: {e}"));
+    });
     if (config_file.metadata()?.mode() & 0o077) != 0 {
-        panic!("config file permissions too liberal: should be 600");
+        fatal_config_error("configuration file permissions are too liberal (expected 600)");
     }
-    let toml_str =
-        fs::read_to_string(config::CONFIG_PATH).expect("could not find configuration file");
-    let config: config::Config =
-        toml::from_str(&toml_str).expect("error parsing configuration file");
+    let toml_str = fs::read_to_string(config::CONFIG_PATH).unwrap_or_else(|e| {
+        fatal_config_error(&format!("could not read configuration file: {e}"));
+    });
+    let config: config::Config = toml::from_str(&toml_str).unwrap_or_else(|e| {
+        fatal_config_error(&format!("error parsing configuration file: {e}"));
+    });
 
     let args = cli::Args::parse();
 
@@ -120,10 +150,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         warn_missing_email_for_user(&me.to_string_lossy());
     }
 
-    let mut conn = Connection::open(&config.db_path)?;
-    conn.pragma_update(None, "foreign_keys", true)?;
+    let mut conn = Connection::open(&config.db_path).unwrap_or_else(|e| {
+        fatal_db_error(&format!("could not open database at {}: {e}", config.db_path.display()));
+    });
+    conn.pragma_update(None, "foreign_keys", true)
+        .unwrap_or_else(|e| fatal_db_error(&format!("could not initialize database: {e}")));
 
-    update_database_schema_if_necessary(&mut conn)?;
+    update_database_schema_if_necessary(&mut conn)
+        .unwrap_or_else(|e| fatal_db_error(&format!("could not migrate database: {e}")));
 
     match args.command {
         cli::Command::Create {

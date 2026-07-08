@@ -111,7 +111,7 @@ pub enum Command {
         other_user: String,
 
         /// Grant read-write access (default is read-only)
-        #[arg(short, long)]
+        #[arg(short = 'w', long)]
         read_write: bool,
 
         /// Revoke the other user's access instead of granting it
