@@ -53,6 +53,74 @@ pub struct Config {
     /// Workspace filesystem definitions
     #[serde(default)]
     pub filesystems: HashMap<String, Filesystem>,
+
+    /// Everything we have no setting for, so that we can point it out
+    #[serde(flatten)]
+    unknown: HashMap<String, toml::Value>,
+}
+
+/// The settings of the `[smtp]` section, for telling a misplaced one apart
+/// from a misspelled one
+const SMTP_KEYS: [&str; 10] = [
+    "relay",
+    "username",
+    "password",
+    "from",
+    "tls",
+    "auth",
+    "recipient_source",
+    "skip_inactive_users",
+    "placeholder_mail_domains",
+    "admin_report_to",
+];
+
+/// The settings of a `[filesystems.<name>]` section
+const FILESYSTEM_KEYS: [&str; 7] = [
+    "root",
+    "max_duration",
+    "expired_retention",
+    "expiry_notifications_on_days",
+    "expiry_notifications",
+    "snapshot",
+    "disabled",
+];
+
+impl Config {
+    /// The settings in the configuration file we don't know anything about.
+    ///
+    /// A setting in the wrong place -- `recipient_source` next to `db_path`
+    /// instead of in `[smtp]`, say, which is easily done when `[smtp]` itself
+    /// is still commented out -- would otherwise simply have no effect, which
+    /// is hard to tell apart from a setting that works.
+    pub fn unknown_keys(&self) -> Vec<String> {
+        let mut unknown = Vec::new();
+
+        for key in self.unknown.keys() {
+            let hint = if SMTP_KEYS.contains(&key.as_str()) {
+                " (it belongs in the [smtp] section)"
+            } else if FILESYSTEM_KEYS.contains(&key.as_str()) {
+                " (it belongs in a [filesystems.<name>] section)"
+            } else {
+                ""
+            };
+            unknown.push(format!("`{}` at the top level{}", key, hint));
+        }
+
+        if let Some(smtp) = &self.smtp {
+            for key in smtp.unknown.keys() {
+                unknown.push(format!("`{}` in [smtp]", key));
+            }
+        }
+
+        for (name, filesystem) in &self.filesystems {
+            for key in filesystem.unknown.keys() {
+                unknown.push(format!("`{}` in [filesystems.{}]", key, name));
+            }
+        }
+
+        unknown.sort();
+        unknown
+    }
 }
 
 fn default_db_path() -> PathBuf {
@@ -110,6 +178,10 @@ pub struct Filesystem {
     /// Whether datasets can be created / extended
     #[serde(default)]
     pub disabled: bool,
+
+    /// Everything we have no setting for, so that we can point it out
+    #[serde(flatten)]
+    unknown: HashMap<String, toml::Value>,
 }
 
 fn from_days<'de, D>(deserializer: D) -> Result<Duration, D::Error>
@@ -166,6 +238,10 @@ pub struct SmtpConfig {
     /// run could not deliver. No summary is sent if this is unset.
     #[serde(default, deserialize_with = "deserialize_opt_mailbox")]
     pub admin_report_to: Option<Mailbox>,
+
+    /// Everything we have no setting for, so that we can point it out
+    #[serde(flatten)]
+    unknown: HashMap<String, toml::Value>,
 }
 
 impl SmtpConfig {
@@ -231,6 +307,7 @@ mod tests {
                 .map(|domain| domain.to_string())
                 .collect(),
             admin_report_to: None,
+            unknown: HashMap::new(),
         }
     }
 
@@ -252,6 +329,77 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn a_misplaced_setting_is_pointed_out() {
+        let config: Config = toml::from_str(
+            "db_path = \"/srv/workspaces.db\"\n\
+             recipient_source = \"sssd\"\n\
+             expiry_notifications_on_days = [7]\n\
+             what_is_this = 42\n\
+             \n\
+             [smtp]\n\
+             relay = \"smtp.example.org\"\n\
+             username = \"workspaces\"\n\
+             password = \"supersecret\"\n\
+             skip_inactiv_users = true\n\
+             \n\
+             [filesystems.bulk]\n\
+             root = \"bulk/ws\"\n\
+             max_duration = 90\n\
+             expired_retention = 30\n\
+             snapshots = false\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.unknown_keys(),
+            [
+                "`expiry_notifications_on_days` at the top level \
+                 (it belongs in a [filesystems.<name>] section)",
+                "`recipient_source` at the top level (it belongs in the [smtp] section)",
+                "`skip_inactiv_users` in [smtp]",
+                "`snapshots` in [filesystems.bulk]",
+                "`what_is_this` at the top level",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_configuration_we_understand_has_nothing_to_point_out() {
+        let config: Config = toml::from_str(
+            "db_path = \"/srv/workspaces.db\"\n\
+             default_filesystem = \"bulk\"\n\
+             \n\
+             [smtp]\n\
+             relay = \"smtp.example.org:587\"\n\
+             username = \"workspaces\"\n\
+             password = \"supersecret\"\n\
+             recipient_source = \"sssd\"\n\
+             skip_inactive_users = true\n\
+             placeholder_mail_domains = [\"katherlab.internal\"]\n\
+             admin_report_to = \"it@example.org\"\n\
+             \n\
+             [filesystems.bulk]\n\
+             root = \"bulk/ws\"\n\
+             max_duration = 90\n\
+             expired_retention = 30\n\
+             expiry_notifications = [-29, 0, 7]\n\
+             snapshot = true\n\
+             disabled = false\n",
+        )
+        .unwrap();
+
+        assert!(
+            config.unknown_keys().is_empty(),
+            "{:?}",
+            config.unknown_keys()
+        );
+        assert_eq!(
+            config.smtp.as_ref().unwrap().recipient_source,
+            RecipientSource::Sssd
+        );
     }
 
     #[test]

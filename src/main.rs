@@ -195,6 +195,24 @@ fn run() -> Result<(), Box<dyn Error>> {
         fatal_config_error(&format!("error parsing configuration file: {e}"));
     });
 
+    // A setting we don't know is a setting that does nothing; say so, rather
+    // than leaving the admin to wonder why it has no effect
+    let unknown_keys = config.unknown_keys();
+    if !unknown_keys.is_empty() {
+        eprintln!(
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  [workspaces] Unknown settings in {path}, which are ignored:
+{keys}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
+            path = config::CONFIG_PATH,
+            keys = unknown_keys
+                .iter()
+                .map(|key| format!("    {key}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+
     let args = cli::Args::parse();
 
     // Warn for the invoking user on every CLI run, but stay quiet in

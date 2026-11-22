@@ -870,21 +870,25 @@ mod tests {
         placeholder_mail_domains: &[&str],
         recipient_source: config::RecipientSource,
     ) -> config::SmtpConfig {
-        config::SmtpConfig {
-            relay: "smtp.example.org".to_string(),
-            username: "workspaces@example.org".to_string(),
-            password: "supersecret".to_string(),
-            from: None,
-            tls: None,
-            auth: None,
-            recipient_source,
-            skip_inactive_users: false,
-            placeholder_mail_domains: placeholder_mail_domains
-                .iter()
-                .map(|domain| domain.to_string())
-                .collect(),
-            admin_report_to: None,
-        }
+        let recipient_source = match recipient_source {
+            config::RecipientSource::File => "file",
+            config::RecipientSource::Sssd => "sssd",
+            config::RecipientSource::SssdThenFile => "sssd-then-file",
+        };
+        let placeholder_mail_domains = placeholder_mail_domains
+            .iter()
+            .map(|domain| format!("\"{}\"", domain))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        toml::from_str(&format!(
+            "relay = \"smtp.example.org\"\n\
+             username = \"workspaces@example.org\"\n\
+             password = \"supersecret\"\n\
+             recipient_source = \"{recipient_source}\"\n\
+             placeholder_mail_domains = [{placeholder_mail_domains}]\n"
+        ))
+        .unwrap()
     }
 
     /// A user whose home directory is a fresh, empty directory
