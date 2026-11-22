@@ -42,7 +42,7 @@ Workspaces can optionally send notification emails for the following events:
 
 * A workspace is **created**, **extended**, or **manually expired**
 * A workspace is **deleted** after its retention period
-* Periodic **expiry reminders** (based on your configured `expiry_notifications` schedule)
+* Periodic **expiry reminders** (based on each filesystem's `expiry_notifications_on_days` schedule)
 
 To enable this, configure the `[smtp]` section in `/etc/workspaces/workspaces.toml`
 and make sure each user sets up their personal email address once:
@@ -54,6 +54,62 @@ echo 'email = "user@example.org"' > ~/.config/workspaces.toml
 
 If a user has not configured their email, the CLI will print a clear reminder
 with the exact command to fix it.
+
+### Taking addresses from the directory (FreeIPA / LDAP / AD)
+
+Instead of each user's own file, Workspaces can use the address the directory
+has for them, which it asks SSSD for:
+
+```toml
+[smtp]
+# ... relay, username, password ...
+recipient_source = "sssd-then-file"
+skip_inactive_users = true
+placeholder_mail_domains = ["katherlab.internal"]
+admin_report_to = "it@example.org"
+```
+
+* **`recipient_source`** — where to look up the recipient's address:
+  * `"file"` — `~USER/.config/workspaces.toml` only. This is the default, so
+    existing setups keep working unchanged.
+  * `"sssd"` — the `mail` attribute the directory has for the user.
+  * `"sssd-then-file"` — the directory, falling back to the user's own file.
+* **`skip_inactive_users`** — don't notify users whose directory account is
+  disabled (`nsAccountLock = TRUE`). Needs one of the SSSD sources.
+* **`placeholder_mail_domains`** — addresses in these domains (e.g.
+  `alice@katherlab.internal`) count as no address at all. Case is irrelevant.
+* **`admin_report_to`** — where to send a summary of the notifications a
+  `workspaces maintain` run could not deliver. One mail per run, grouped by
+  user; nothing is sent if there is nothing to report.
+
+The lookup goes through SSSD's InfoPipe, which only hands out attributes that
+are allow-listed in `/etc/sssd/sssd.conf`:
+
+```ini
+[ifp]
+user_attributes = +mail, +nsAccountLock
+```
+
+```console
+$ sudo systemctl restart sssd
+```
+
+You can check what Workspaces will see for a user with:
+
+```console
+$ busctl call --system org.freedesktop.sssd.infopipe \
+    /org/freedesktop/sssd/infopipe org.freedesktop.sssd.infopipe \
+    GetUserAttr sas alice 2 mail nsAccountLock
+a{sv} 2 "mail" as 1 "alice@tu-dresden.de" "nsAccountLock" as 1 "FALSE"
+```
+
+A user who cannot be reached — no address, only a placeholder address, a
+disabled account, no such user any more, or a directory that cannot be asked —
+is skipped, and the skipped expiry reminder is **not** recorded as sent: once
+they have a working address again, they still get their reminder. With
+`recipient_source` other than `"file"`, the CLI's reminder about a missing
+address says what the directory is missing instead of naming a file the user
+cannot usefully edit.
 
 ## User Tutorial
 

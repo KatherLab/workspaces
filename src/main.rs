@@ -29,6 +29,7 @@ mod list;
 mod maintain;
 mod rename;
 mod share;
+mod userinfo;
 mod zfs;
 
 enum ExitCodes {
@@ -57,8 +58,50 @@ fn to_volume_string(root: &str, user: &str, name: &str) -> String {
     format!("{}/{}/{}", root, user, name)
 }
 
+/// Warns if we would not be able to notify `username` by email.
+///
+/// Where the user's own `~/.config/workspaces.toml` is the source of the
+/// address, this points at that file, which they can fix themselves. Where the
+/// directory is, there is nothing for them to edit, so we only warn when it
+/// actually holds no usable address for them.
+fn warn_missing_email_for_user(username: &str, smtp: &Option<config::SmtpConfig>) {
+    let Some(smtp_config) = smtp else {
+        // No SMTP configuration at all: nothing is ever sent, but the user's
+        // own configuration file is still the thing to fix
+        warn_missing_email_in_file(username);
+        return;
+    };
+
+    if smtp_config.recipient_source == config::RecipientSource::File {
+        warn_missing_email_in_file(username);
+        return;
+    }
+
+    let maintain::Recipient::Skip(reason) = maintain::resolve_recipient(username, smtp_config)
+    else {
+        return;
+    };
+
+    let hint = if smtp_config.recipient_source == config::RecipientSource::SssdThenFile {
+        "💡  Please ask your IT department to add an email address to this account,
+    or configure one for it directly:
+    mkdir -p ~/.config && echo 'email = \"you@example.org\"' > ~/.config/workspaces.toml"
+    } else {
+        "💡  Please ask your IT department to add an email address to this account."
+    };
+
+    eprintln!(
+        "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  [workspaces] No email notifications for `{username}`
+    {reason}
+
+{hint}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    );
+}
+
 /// Warns if `~USERNAME/.config/workspaces.toml` is missing or lacks a valid `email`.
-fn warn_missing_email_for_user(username: &str) {
+fn warn_missing_email_in_file(username: &str) {
     use std::fs;
     use users::{get_user_by_name, os::unix::UserExt};
 
@@ -158,7 +201,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     // machine-readable modes (csv/json) so the output stays parseable.
     if matches!(args.format, cli::OutputFormat::Table) {
         if let Some(me) = get_current_username() {
-            warn_missing_email_for_user(&me.to_string_lossy());
+            warn_missing_email_for_user(&me.to_string_lossy(), &config.smtp);
         }
     }
 
@@ -180,7 +223,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             user,
         } => {
             // Warn for target user
-            warn_missing_email_for_user(&user);
+            warn_missing_email_for_user(&user, &config.smtp);
 
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
@@ -219,7 +262,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             filesystem_name,
         } => {
             // Warn for target user
-            warn_missing_email_for_user(&user);
+            warn_missing_email_for_user(&user, &config.smtp);
 
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
@@ -245,7 +288,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             duration,
         } => {
             // Warn for target user
-            warn_missing_email_for_user(&user);
+            warn_missing_email_for_user(&user, &config.smtp);
 
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
@@ -300,7 +343,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             delete_on_next_clean,
         } => {
             // Warn for target user
-            warn_missing_email_for_user(&user);
+            warn_missing_email_for_user(&user, &config.smtp);
 
             let filesystem_name = filesystem_or_default_or_exit(
                 &filesystem_name,
@@ -335,7 +378,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
         cli::Command::NotifyTest { user, to } => {
             // Warn for target user
-            warn_missing_email_for_user(&user);
+            warn_missing_email_for_user(&user, &config.smtp);
 
             // Admins only
             if get_current_uid() != 0 {

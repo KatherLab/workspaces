@@ -18,6 +18,19 @@ pub enum TlsMode {
     Wrapper,
 }
 
+/// Where to look up the email address a notification goes to
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecipientSource {
+    /// `~USER/.config/workspaces.toml`, as workspaces has always done
+    #[default]
+    File,
+    /// The directory (FreeIPA, LDAP, AD), through SSSD
+    Sssd,
+    /// The directory, falling back to the user's own configuration file
+    SssdThenFile,
+}
+
 /// Preferred SMTP auth mechanism (optional). If unset, we auto-negotiate.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,7 +93,14 @@ pub struct Filesystem {
     /// Days relative to the expiration time the user will be notified.
     /// Negative durations will lead to messages being sent after expiry,
     /// but before deletion.
-    #[serde(default = "Vec::new", deserialize_with = "from_days_list")]
+    ///
+    /// `expiry_notifications` is accepted as well, since that is the name the
+    /// example configuration file used to suggest.
+    #[serde(
+        default = "Vec::new",
+        alias = "expiry_notifications",
+        deserialize_with = "from_days_list"
+    )]
     pub expiry_notifications_on_days: Vec<Duration>,
 
     /// Snapshot
@@ -124,6 +144,43 @@ pub struct SmtpConfig {
     /// Optional auth mechanism override ("plain" or "login"); default: auto-negotiate.
     #[serde(default)]
     pub auth: Option<AuthMethod>,
+
+    /// Where to look up recipients' email addresses: "file" (the default),
+    /// "sssd", or "sssd-then-file".
+    #[serde(default)]
+    pub recipient_source: RecipientSource,
+
+    /// Whether to skip users whose directory account is disabled
+    /// (`nsAccountLock = TRUE`). Only the directory knows about this, so this
+    /// has no effect with `recipient_source = "file"`.
+    #[serde(default)]
+    pub skip_inactive_users: bool,
+
+    /// Mail domains which stand in for a missing address, e.g.
+    /// `["katherlab.internal"]`. An address in one of them counts as no
+    /// address at all. Case is irrelevant.
+    #[serde(default)]
+    pub placeholder_mail_domains: Vec<String>,
+
+    /// Where to send the summary of the notifications a `workspaces maintain`
+    /// run could not deliver. No summary is sent if this is unset.
+    #[serde(default, deserialize_with = "deserialize_opt_mailbox")]
+    pub admin_report_to: Option<Mailbox>,
+}
+
+impl SmtpConfig {
+    /// Whether `address` is a placeholder rather than a real address, i.e.
+    /// whether its domain is one of `placeholder_mail_domains`.
+    pub fn is_placeholder_address(&self, address: &str) -> bool {
+        let Some((_, domain)) = address.rsplit_once('@') else {
+            return false;
+        };
+        self.placeholder_mail_domains.iter().any(|placeholder| {
+            // Be forgiving about how the domains are written down
+            let placeholder = placeholder.trim().trim_start_matches('@');
+            !placeholder.is_empty() && domain.trim().eq_ignore_ascii_case(placeholder)
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,5 +209,118 @@ where
             de::Error::invalid_value(Unexpected::Str(&s), &"a valid email address string")
         }),
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn smtp_config(placeholder_mail_domains: &[&str]) -> SmtpConfig {
+        SmtpConfig {
+            relay: "smtp.example.org".to_string(),
+            username: "workspaces".to_string(),
+            password: "supersecret".to_string(),
+            from: None,
+            tls: None,
+            auth: None,
+            recipient_source: RecipientSource::default(),
+            skip_inactive_users: false,
+            placeholder_mail_domains: placeholder_mail_domains
+                .iter()
+                .map(|domain| domain.to_string())
+                .collect(),
+            admin_report_to: None,
+        }
+    }
+
+    #[test]
+    fn the_notification_schedule_is_read_under_either_name() {
+        for key in ["expiry_notifications_on_days", "expiry_notifications"] {
+            let filesystem: Filesystem = toml::from_str(&format!(
+                "root = \"bulk/ws\"\n\
+                 max_duration = 90\n\
+                 expired_retention = 30\n\
+                 {key} = [-29, 0, 14]\n"
+            ))
+            .unwrap();
+
+            assert_eq!(
+                filesystem.expiry_notifications_on_days,
+                [Duration::days(-29), Duration::days(0), Duration::days(14)],
+                "`{}` should configure the notification schedule",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn placeholder_domains_are_recognized_whatever_their_case() {
+        let config = smtp_config(&["katherlab.internal"]);
+
+        assert!(config.is_placeholder_address("alice@katherlab.internal"));
+        assert!(config.is_placeholder_address("Alice@KatherLab.Internal"));
+        assert!(!config.is_placeholder_address("alice@tu-dresden.de"));
+        // Only the domain counts, not a lookalike local part
+        assert!(!config.is_placeholder_address("katherlab.internal@tu-dresden.de"));
+        // … and not a sub- or superdomain of it
+        assert!(!config.is_placeholder_address("alice@mail.katherlab.internal"));
+        assert!(!config.is_placeholder_address("alice@katherlab.internal.de"));
+    }
+
+    #[test]
+    fn without_placeholder_domains_every_address_counts() {
+        let config = smtp_config(&[]);
+
+        assert!(!config.is_placeholder_address("alice@katherlab.internal"));
+        assert!(!config.is_placeholder_address("alice@tu-dresden.de"));
+    }
+
+    #[test]
+    fn placeholder_domains_may_be_written_with_an_at_sign() {
+        let config = smtp_config(&["@katherlab.internal", " ", "example.invalid"]);
+
+        assert!(config.is_placeholder_address("alice@katherlab.internal"));
+        assert!(config.is_placeholder_address("alice@example.invalid"));
+        // An empty entry must not swallow addresses without a domain
+        assert!(!config.is_placeholder_address("alice"));
+        assert!(!config.is_placeholder_address("alice@"));
+    }
+
+    #[test]
+    fn the_recipient_source_defaults_to_the_users_own_file() {
+        let config: SmtpConfig = toml::from_str(
+            "relay = \"smtp.example.org\"\n\
+             username = \"workspaces\"\n\
+             password = \"supersecret\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(config.recipient_source, RecipientSource::File);
+        assert!(!config.skip_inactive_users);
+        assert!(config.placeholder_mail_domains.is_empty());
+        assert!(config.admin_report_to.is_none());
+    }
+
+    #[test]
+    fn the_recipient_source_is_read_from_the_configuration() {
+        let config: SmtpConfig = toml::from_str(
+            "relay = \"smtp.example.org\"\n\
+             username = \"workspaces\"\n\
+             password = \"supersecret\"\n\
+             recipient_source = \"sssd-then-file\"\n\
+             skip_inactive_users = true\n\
+             placeholder_mail_domains = [\"katherlab.internal\"]\n\
+             admin_report_to = \"it@example.org\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(config.recipient_source, RecipientSource::SssdThenFile);
+        assert!(config.skip_inactive_users);
+        assert_eq!(config.placeholder_mail_domains, ["katherlab.internal"]);
+        assert_eq!(
+            config.admin_report_to.map(|mailbox| mailbox.to_string()),
+            Some("it@example.org".to_string())
+        );
     }
 }

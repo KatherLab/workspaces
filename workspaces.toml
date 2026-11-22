@@ -28,7 +28,10 @@
 ## Whether to make snapshots during maintainance
 #snapshot = false
 
-expiry_notifications = [-29, -25, -20, -10, 0, 7, 14]
+## Days relative to the expiration date on which the user is reminded.
+## Negative values send reminders after expiry, but before deletion.
+## (`expiry_notifications` is still accepted as a name for this.)
+#expiry_notifications_on_days = [-29, -25, -20, -10, 0, 7, 14]
 
 ## Whether the filesystem is disabled
 ##
@@ -72,3 +75,28 @@ expiry_notifications = [-29, -25, -20, -10, 0, 7, 14]
 ## Optional: force the auth mechanism. Allowed values: "login", "plain".
 ## If unset, the client will auto-negotiate.
 #auth = "login"
+
+## Where to look up the address a notification is sent to:
+##   "file"           -- `~USER/.config/workspaces.toml` (default)
+##   "sssd"           -- the directory (FreeIPA, LDAP, AD), queried through SSSD
+##   "sssd-then-file" -- the directory, falling back to the user's own file
+##
+## The SSSD sources need the attributes allow-listed in `/etc/sssd/sssd.conf`:
+##     [ifp]
+##     user_attributes = +mail, +nsAccountLock
+## followed by `systemctl restart sssd`.
+#recipient_source = "sssd-then-file"
+
+## Whether to skip users whose directory account is disabled
+## (`nsAccountLock = TRUE`). Only the directory knows this, so this has no
+## effect with `recipient_source = "file"`.
+#skip_inactive_users = true
+
+## Mail domains which stand in for a missing address: an address in one of them
+## counts as no address at all. Upper and lower case make no difference.
+#placeholder_mail_domains = ["katherlab.internal"]
+
+## Where to send the summary of the notifications a `workspaces maintain` run
+## could not deliver. If unset, no summary is sent; neither is one if there was
+## nothing to report.
+#admin_report_to = "it@example.org"

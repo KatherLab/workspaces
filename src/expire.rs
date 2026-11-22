@@ -102,9 +102,7 @@ pub fn expire(
                 name, host, filesystem_name, filesystem_name, name
             )
         };
-        if let Err(e) = crate::maintain::notify_event(user, smtp_cfg, subject, body) {
-            eprintln!("Failed to send 'expired' email: {}", e);
-        }
+        crate::maintain::notify_event_or_warn(user, smtp_cfg, "expired", subject, body);
     }
 
     Ok(())

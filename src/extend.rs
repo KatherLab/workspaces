@@ -112,9 +112,7 @@ pub fn extend(
             "Hello,\n\nYour workspace \"{}\" on {} was extended.\nFilesystem: {}\nNew expiry date: {}\n(days until expiry: {} days)\n",
             name, host, filesystem_name, new_expiration, (new_expiration - chrono::Utc::now()).num_days()
         );
-        if let Err(e) = crate::maintain::notify_event(user, smtp_cfg, subject, body) {
-            eprintln!("Failed to send 'extended' email: {}", e);
-        }
+        crate::maintain::notify_event_or_warn(user, smtp_cfg, "extended", subject, body);
     }
 
     Ok(())

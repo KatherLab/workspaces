@@ -184,17 +184,19 @@ pub enum Command {
     Maintain,
     /// Send a one-off test notification email (admins only)
     NotifyTest {
-        /// User whose ~/.config/workspaces.toml holds the recipient email
+        /// User to look the recipient address up for
         ///
+        /// Where it is looked up depends on `[smtp] recipient_source`:
+        /// the user's ~/.config/workspaces.toml, the directory, or both.
         /// Use --to to override and send to an arbitrary address.
         #[arg(short, long, default_value_t = get_current_username().unwrap().to_string_lossy().to_string(), value_parser = parse_pathsafe)]
         user: String,
 
-        /// Explicit recipient email address (overrides user's config)
+        /// Explicit recipient email address (overrides the lookup)
         ///
         /// Example: "Workspaces Admin <admin@example.org>"
-        /// If omitted, we read the user's ~/.config/workspaces.toml
-        /// (the `email = "..."` field).
+        /// If omitted, the address is looked up for --user the same way a
+        /// notification's would be.
         #[arg(long = "to")]
         to: Option<String>,
     },

@@ -143,9 +143,7 @@ pub fn create(
             "Hello,\n\nYour workspace \"{}\" has been created on {}.\nFilesystem: {}\nMountpoint: {}\nInitial expiry: in {} days.\n\nYou can extend it with:\n  workspaces extend -f {} -d <days> {}\n",
             name, host, filesystem_name, mountpoint.display(), expiry_days, filesystem_name, name
         );
-        if let Err(e) = crate::maintain::notify_event(user, smtp_cfg, subject, body) {
-            eprintln!("Failed to send 'created' email: {}", e);
-        }
+        crate::maintain::notify_event_or_warn(user, smtp_cfg, "created", subject, body);
     }
 
     Ok(())
