@@ -4,9 +4,13 @@ use rusqlite::Connection;
 
 pub const UPDATE_DB: &[fn(&mut Connection) -> Result<(), Box<dyn Error>>] = &[
     |conn| {
+        // Switch to WAL mode before opening a transaction: SQLite refuses to
+        // change the journal mode while one is active, and the mode is stored
+        // in the database file, so setting it once at creation is enough
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+
         // Create initial database
         let transaction = conn.transaction()?;
-        transaction.pragma_update(None, "journal_mode", "WAL")?;
         transaction.execute(
             "CREATE TABLE workspaces ( \
                 filesystem      TEXT     NOT NULL, \
