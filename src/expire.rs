@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::Connection;
 use users::{get_current_uid, get_current_username};
 
-use crate::{config, to_volume_string, zfs, ExitCodes};
+use crate::{config, errors::Context, to_volume_string, zfs, ExitCodes};
 
 pub fn expire(
     conn: &mut Connection,
@@ -28,7 +28,9 @@ pub fn expire(
         Utc::now()
     };
 
-    let transaction = conn.transaction()?;
+    let transaction = conn
+        .transaction()
+        .context("could not start a database transaction")?;
     // Get workspace id
     let workspace_id: i64 = match transaction
         .prepare(
@@ -36,7 +38,8 @@ pub fn expire(
                 WHERE filesystem = ?1 \
                     AND user = ?2 \
                     AND name = ?3",
-        )?
+        )
+        .context("could not query the workspaces database")?
         .query_row((filesystem_name, user, name), |row| row.get(0))
     {
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -46,36 +49,43 @@ pub fn expire(
             );
             process::exit(ExitCodes::UnknownWorkspace as i32);
         }
-        res @ _ => res,
-    }?;
+        res => res.context("could not look up the workspace in the database")?,
+    };
 
-    transaction.execute(
-        "UPDATE workspaces \
+    transaction
+        .execute(
+            "UPDATE workspaces \
                 SET expiration_time = MIN(expiration_time, ?2) \
                 WHERE id = ?1",
-        (workspace_id, expiration_time),
-    )?;
+            (workspace_id, expiration_time),
+        )
+        .context("could not update the workspace's expiration date in the database")?;
 
     if get_current_username().unwrap() == user && get_current_uid() != 0 {
         // The user just expired their workspace, so they don't want deletion notices.
         // We disable them by creating a faux notification in the future.
         // TODO refactor this into a separate column in workspaces.
-        transaction.execute(
-            "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
-            (workspace_id, expiration_time),
-        )?;
+        transaction
+            .execute(
+                "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
+                (workspace_id, expiration_time),
+            )
+            .context("could not record the workspace's notification state in the database")?;
     }
 
-    transaction.commit()?;
+    transaction
+        .commit()
+        .context("could not save the workspace's expiration in the database")?;
 
-    zfs::set_property(
-        &to_volume_string(&filesystem.root, user, name),
-        "readonly",
-        "on",
-    )?;
+    let volume = to_volume_string(&filesystem.root, user, name);
+    zfs::set_property(&volume, "readonly", "on")
+        .context(format!("could not make the dataset {} read-only", volume))?;
 
     if let Some(smtp_cfg) = smtp.as_ref() {
-        let host = hostname::get()?.to_string_lossy().to_string();
+        let host = hostname::get()
+            .context("could not determine this host's name")?
+            .to_string_lossy()
+            .to_string();
         let subject = if delete_on_next_clean {
             format!("Workspace {} scheduled for deletion on {}", name, host)
         } else {

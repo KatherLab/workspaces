@@ -1,4 +1,4 @@
-use crate::{config, to_volume_string, zfs};
+use crate::{config, errors::Context, to_volume_string, zfs};
 use chrono::{DateTime, Duration, Local, Utc};
 use lettre::{
     address::AddressError,
@@ -17,24 +17,42 @@ pub fn maintain(
     filesystems: &HashMap<String, config::Filesystem>,
     smtp_config: &Option<config::SmtpConfig>,
 ) -> Result<(), Box<dyn Error>> {
-    let transaction = conn.transaction()?;
+    // Problems with a single workspace shouldn't stop us from maintaining the
+    // others, so they are counted and reported once we're done
+    let mut failures: usize = 0;
+
+    let transaction = conn
+        .transaction()
+        .context("could not start a database transaction")?;
     {
         let mut statement = transaction
-            .prepare("SELECT id, filesystem, user, name, expiration_time FROM workspaces")?;
-        let mut rows = statement.query([])?;
-        while let Some(row) = rows.next()? {
+            .prepare("SELECT id, filesystem, user, name, expiration_time FROM workspaces")
+            .context("could not query the workspaces database")?;
+        let mut rows = statement
+            .query([])
+            .context("could not query the workspaces database")?;
+        while let Some(row) = rows
+            .next()
+            .context("could not read a workspace from the database")?
+        {
             let workspace_id: i32 = row.get(0)?;
             let filesystem_name: String = row.get(1)?;
             let username: String = row.get(2)?;
             let workspace_name: String = row.get(3)?;
             let expiration_time: DateTime<Utc> = row.get(4)?;
 
-            let filesystem = &filesystems
-                .get(&filesystem_name)
-                .expect("unknown filesystem name");
+            let Some(filesystem) = filesystems.get(&filesystem_name) else {
+                eprintln!(
+                    "Workspace {} of {} lies on filesystem {}, which is not configured; \
+                     skipping it",
+                    workspace_name, username, filesystem_name
+                );
+                failures += 1;
+                continue;
+            };
 
             if let Some(smtp_config) = smtp_config {
-                match notify_if_necessary_(
+                let notification = notify_if_necessary_(
                     workspace_id,
                     &workspace_name,
                     &username,
@@ -42,16 +60,21 @@ pub fn maintain(
                     filesystem,
                     expiration_time,
                     &transaction,
-                ) {
-                    user_error @ Err(
+                );
+                if let Err(error) = notification {
+                    eprintln!(
+                        "Could not notify {} about workspace {}: {}",
+                        username, workspace_name, error
+                    );
+                    // A user without (valid) email configuration is a normal
+                    // state of affairs, not a failed maintenance run
+                    if !matches!(
+                        error,
                         NotificationError::UserConfigReadError(..)
                             | NotificationError::UserConfigParseError(..)
-                            | NotificationError::MailboxParseError(..),
-                    ) => {
-                        eprintln!("User error while notifying {}: {:?}", username, user_error);
-                    }
-                    res => {
-                        res.expect("non-recoverable error during notification process");
+                            | NotificationError::MailboxParseError(..)
+                    ) {
+                        failures += 1;
                     }
                 }
             }
@@ -60,16 +83,23 @@ pub fn maintain(
 
             if expiration_time < Local::now() - filesystem.expired_retention {
                 // Delete workspaces expired beyond their retention date
-                if zfs::destroy(&volume).is_err() {
+                if let Err(error) = zfs::destroy(&volume) {
+                    eprintln!("Could not delete the dataset {}: {}", volume, error);
+                    failures += 1;
                     continue;
                 }
-                transaction.execute(
-                    "DELETE FROM workspaces
+                transaction
+                    .execute(
+                        "DELETE FROM workspaces
                             WHERE id = ?1",
-                    [workspace_id],
-                )?;
+                        [workspace_id],
+                    )
+                    .context("could not remove the deleted workspace from the database")?;
                 if let Some(smtp) = smtp_config {
-                    let host = hostname::get()?.to_string_lossy().to_string();
+                    let host = hostname::get()
+                        .context("could not determine this host's name")?
+                        .to_string_lossy()
+                        .to_string();
                     let subject = format!("Your workspace {} on {} was deleted.", workspace_name, host);
                     let body = format!(
                         "Hello,\n\nYour workspace \"{}\" on {} has been permanently deleted.\nFilesystem: {}\nOwner: {}\n",
@@ -82,17 +112,34 @@ pub fn maintain(
                 }
             } else if expiration_time < Local::now() {
                 // Set recently expired workspaces to read-only
-                zfs::set_property(&volume, "readonly", "on")?;
+                if let Err(error) = zfs::set_property(&volume, "readonly", "on") {
+                    eprintln!("Could not make the dataset {} read-only: {}", volume, error);
+                    failures += 1;
+                }
             }
         }
     }
-    transaction.commit()?;
+    transaction
+        .commit()
+        .context("could not save this maintenance run's changes to the database")?;
 
     // Snapshot all remaining filesystems for which this is desired
     for filesystem in filesystems.values() {
         if filesystem.snapshot {
-            zfs::snapshot(&filesystem.root)?
+            if let Err(error) = zfs::snapshot(&filesystem.root) {
+                eprintln!("Could not snapshot {}: {}", filesystem.root, error);
+                failures += 1;
+            }
         }
+    }
+
+    if failures > 0 {
+        return Err(format!(
+            "{} maintenance {} failed; see the messages above",
+            failures,
+            if failures == 1 { "step" } else { "steps" }
+        )
+        .into());
     }
 
     Ok(())
@@ -108,6 +155,12 @@ enum NotificationError {
     MailboxParseError(AddressError),
     /// Failed to build TLS parameters for the given relay host
     TlsParametersInvalid(String),
+    /// The name of this host could not be determined
+    HostnameError(io::Error),
+    /// The notification could not be assembled into an email
+    MessageBuildError(lettre::error::Error),
+    /// The notification could not be recorded in the database
+    DatabaseError(rusqlite::Error),
 }
 
 impl std::error::Error for NotificationError {
@@ -119,6 +172,9 @@ impl std::error::Error for NotificationError {
             Self::SmtpError(err) => Some(err),
             Self::MailboxParseError(err) => Some(err),
             Self::TlsParametersInvalid(..) => None,
+            Self::HostnameError(err) => Some(err),
+            Self::MessageBuildError(err) => Some(err),
+            Self::DatabaseError(err) => Some(err),
         }
     }
 }
@@ -138,13 +194,31 @@ impl std::fmt::Display for NotificationError {
                 "TLS parameters could not be constructed for relay host: {}",
                 host
             ),
+            Self::HostnameError(err) => write!(f, "could not determine this host's name: {}", err),
+            Self::MessageBuildError(err) => write!(f, "could not build the email: {}", err),
+            Self::DatabaseError(err) => write!(f, "database error: {}", err),
         }
     }
 }
 
 impl From<io::Error> for NotificationError {
     fn from(value: io::Error) -> Self {
-        NotificationError::UserConfigReadError(value)
+        // The only `io::Error` reaching us here comes from looking up the host
+        // name; the user's configuration file is read with an explicit
+        // `map_err`, since a missing one is not an error we want to abort on
+        NotificationError::HostnameError(value)
+    }
+}
+
+impl From<lettre::error::Error> for NotificationError {
+    fn from(value: lettre::error::Error) -> Self {
+        NotificationError::MessageBuildError(value)
+    }
+}
+
+impl From<rusqlite::Error> for NotificationError {
+    fn from(value: rusqlite::Error) -> Self {
+        NotificationError::DatabaseError(value)
     }
 }
 
@@ -326,7 +400,7 @@ You can extend it by logging into {} and running
                     workspace_name,
                     workspace_name,
                 ))
-                .unwrap();
+                .map_err(NotificationError::MessageBuildError)?;
 
             mailer.send(&email).map_err(NotificationError::SmtpError)?;
             connection
@@ -334,7 +408,7 @@ You can extend it by logging into {} and running
                     "INSERT INTO notifications(workspace_id, timestamp) VALUES(?1, ?2)",
                     (workspace_id, Utc::now()),
                 )
-                .unwrap();
+                .map_err(NotificationError::DatabaseError)?;
         }
     }
     Ok(())

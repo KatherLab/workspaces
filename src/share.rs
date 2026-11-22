@@ -3,7 +3,7 @@ use std::{error::Error, path::PathBuf, process};
 use rusqlite::Connection;
 use users::{get_current_uid, get_current_username};
 
-use crate::{config, to_volume_string, zfs, ExitCodes};
+use crate::{config, errors::Context, to_volume_string, zfs, ExitCodes};
 
 /// Share a workspace with another user via POSIX ACLs, or revoke their access.
 ///
@@ -26,7 +26,9 @@ pub fn share(
         process::exit(ExitCodes::InsufficientPrivileges as i32);
     }
 
-    let transaction = conn.transaction()?;
+    let transaction = conn
+        .transaction()
+        .context("could not start a database transaction")?;
 
     // Get workspace id, exiting if it doesn't exist
     let workspace_id: i64 = match transaction
@@ -35,7 +37,8 @@ pub fn share(
                 WHERE filesystem = ?1 \
                     AND user = ?2 \
                     AND name = ?3",
-        )?
+        )
+        .context("could not query the workspaces database")?
         .query_row((filesystem_name, user, name), |row| row.get(0))
     {
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -45,11 +48,12 @@ pub fn share(
             );
             process::exit(ExitCodes::UnknownWorkspace as i32);
         }
-        res @ _ => res,
-    }?;
+        res => res.context("could not look up the workspace in the database")?,
+    };
 
     let volume = to_volume_string(&filesystem.root, user, name);
-    let mountpoint: PathBuf = zfs::get_property::<PathBuf>(&volume, "mountpoint")?;
+    let mountpoint: PathBuf = zfs::get_property::<PathBuf>(&volume, "mountpoint")
+        .context(format!("could not find out where {} is mounted", volume))?;
     let mp = mountpoint.to_string_lossy().to_string();
 
     if revoke {
@@ -68,10 +72,12 @@ pub fn share(
             "+",
         ])?;
         // Forget the share in the database
-        transaction.execute(
-            "DELETE FROM shares WHERE workspace_id = ?1 AND user = ?2",
-            (workspace_id, other_user),
-        )?;
+        transaction
+            .execute(
+                "DELETE FROM shares WHERE workspace_id = ?1 AND user = ?2",
+                (workspace_id, other_user),
+            )
+            .context("could not remove the share from the database")?;
         println!(
             "Revoked access for {} on workspace at {}",
             other_user,
@@ -116,12 +122,14 @@ pub fn share(
         }
         // Remember the share in the database
         // (INSERT OR REPLACE so re-sharing with a different mode updates the row)
-        transaction.execute(
-            "INSERT INTO shares(workspace_id, user, read_write) \
+        transaction
+            .execute(
+                "INSERT INTO shares(workspace_id, user, read_write) \
                 VALUES(?1, ?2, ?3) \
                 ON CONFLICT(workspace_id, user) DO UPDATE SET read_write = ?3",
-            (workspace_id, other_user, i64::from(read_write)),
-        )?;
+                (workspace_id, other_user, i64::from(read_write)),
+            )
+            .context("could not record the share in the database")?;
         println!(
             "Shared workspace at {} with {} ({})",
             mountpoint.display(),
@@ -130,7 +138,9 @@ pub fn share(
         );
     }
 
-    transaction.commit()?;
+    transaction
+        .commit()
+        .context("could not save the share in the database")?;
     Ok(())
 }
 

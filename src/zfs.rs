@@ -98,7 +98,8 @@ where
     if !output.status.success() {
         return Err(Error::ZfsStatus(output.status));
     }
-    let mut info_line = String::from_utf8(output.stdout).unwrap();
+    let mut info_line =
+        String::from_utf8(output.stdout).map_err(|e| Error::PropertyParse(Box::new(e)))?;
     info_line.pop(); // remove trailing newline
     info_line
         .parse()

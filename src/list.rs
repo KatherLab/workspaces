@@ -74,7 +74,13 @@ pub fn list(
             {
                 continue;
             }
-            let fs = &filesystems[&workspace.filesystem_name];
+            let Some(fs) = filesystems.get(&workspace.filesystem_name) else {
+                eprintln!(
+                    "Skipping workspace {}: its filesystem {} is not configured",
+                    workspace.name, workspace.filesystem_name
+                );
+                continue;
+            };
             let volume = to_volume_string(&fs.root, &workspace.user, &workspace.name);
             let referenced = zfs::get_property::<usize>(&volume, "referenced").ok();
             let mountpoint = zfs::get_property::<PathBuf>(&volume, "mountpoint").ok();
@@ -135,14 +141,14 @@ pub fn list(
         {
             continue;
         }
-        let volume = to_volume_string(
-            &filesystems
-                .get(&workspace.filesystem_name)
-                .expect("found workspace in database without corresponding config entry")
-                .root,
-            &workspace.user,
-            &workspace.name,
-        );
+        let Some(filesystem) = filesystems.get(&workspace.filesystem_name) else {
+            eprintln!(
+                "Skipping workspace {}: its filesystem {} is not configured",
+                workspace.name, workspace.filesystem_name
+            );
+            continue;
+        };
+        let volume = to_volume_string(&filesystem.root, &workspace.user, &workspace.name);
         let referenced = zfs::get_property::<usize>(&volume, "referenced");
         let mountpoint = zfs::get_property::<PathBuf>(&volume, "mountpoint");
         if mountpoint.is_err() || referenced.is_err() {
@@ -157,10 +163,7 @@ pub fn list(
                     WorkspacesColumns::User => Cell::new(&workspace.user),
                     WorkspacesColumns::Fs => Cell::new(&workspace.filesystem_name),
                     WorkspacesColumns::Expiry => {
-                        if Utc::now()
-                            > workspace.expiration_time
-                                + filesystems[&workspace.filesystem_name].expired_retention
-                        {
+                        if Utc::now() > workspace.expiration_time + filesystem.expired_retention {
                             Cell::new("deleted soon")
                                 .with_style(Attr::Bold)
                                 .with_style(Attr::ForegroundColor(color::RED))
@@ -168,9 +171,7 @@ pub fn list(
                             Cell::new_align(
                                 &format!(
                                     "deleted in {:>2}d",
-                                    (workspace.expiration_time
-                                        + filesystems[&workspace.filesystem_name]
-                                            .expired_retention
+                                    (workspace.expiration_time + filesystem.expired_retention
                                         - Utc::now())
                                     .num_days()
                                 ),

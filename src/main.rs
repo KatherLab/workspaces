@@ -2,6 +2,7 @@ use chrono::Utc;
 use clap::Parser;
 use create::create;
 use db_schema::{NEWEST_DB_VERSION, UPDATE_DB};
+use errors::Context;
 use expire::expire;
 use extend::extend;
 use filesystems::filesystems;
@@ -10,8 +11,8 @@ use maintain::maintain;
 use rename::rename;
 use rusqlite::{backup, Connection};
 use std::{
-    collections::HashMap, error::Error, fs, os::unix::fs::MetadataExt, path::Path, process,
-    time::Duration,
+    collections::HashMap, error::Error, ffi::OsStr, fs, os::unix::fs::MetadataExt, path::Path,
+    process, time::Duration,
 };
 use users::{get_current_uid, get_current_username};
 
@@ -19,6 +20,7 @@ mod cli;
 mod config;
 mod create;
 mod db_schema;
+mod errors;
 mod expire;
 mod extend;
 mod filesystems;
@@ -43,6 +45,12 @@ enum ExitCodes {
     WorkspaceExists,
     /// No filesystem given and no default specified in configuration file
     NoFilesystemSpecified,
+    /// The disk holding the database (or a workspace) has no space left
+    StorageFull,
+    /// The database could not be read or written
+    DatabaseError,
+    /// An unexpected internal error, i.e. a bug in workspaces
+    InternalError,
 }
 
 fn to_volume_string(root: &str, user: &str, name: &str) -> String {
@@ -115,26 +123,26 @@ fn fatal_config_error(detail: &str) -> ! {
     process::exit(1);
 }
 
-/// Print a fatal database error and exit.
-///
-/// Used when the database cannot be opened, e.g. because the disk is full
-/// or the database file is missing/corrupted.
-fn fatal_db_error(detail: &str) -> ! {
-    eprintln!(
-        "Error: {detail}\n\
-         \n\
-         The workspaces database could not be opened. Please contact your system administrator."
-    );
-    process::exit(1);
+fn main() {
+    // Make sure even a bug reads as something other than a Rust panic
+    errors::install_panic_hook();
+
+    if let Err(error) = run() {
+        // Explain the failure in terms the user can act on, and exit with a
+        // code matching it
+        errors::report(error.as_ref());
+    }
 }
 
-
-fn main() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error>> {
     // Read config
     let config_file = fs::File::open(config::CONFIG_PATH).unwrap_or_else(|e| {
         fatal_config_error(&format!("could not open configuration file: {e}"));
     });
-    if (config_file.metadata()?.mode() & 0o077) != 0 {
+    let metadata = config_file.metadata().unwrap_or_else(|e| {
+        fatal_config_error(&format!("could not read configuration file metadata: {e}"));
+    });
+    if (metadata.mode() & 0o077) != 0 {
         fatal_config_error("configuration file permissions are too liberal (expected 600)");
     }
     let toml_str = fs::read_to_string(config::CONFIG_PATH).unwrap_or_else(|e| {
@@ -154,14 +162,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let mut conn = Connection::open(&config.db_path).unwrap_or_else(|e| {
-        fatal_db_error(&format!("could not open database at {}: {e}", config.db_path.display()));
-    });
+    let mut conn = Connection::open(&config.db_path).context(format!(
+        "could not open the workspaces database at {}",
+        config.db_path.display()
+    ))?;
     conn.pragma_update(None, "foreign_keys", true)
-        .unwrap_or_else(|e| fatal_db_error(&format!("could not initialize database: {e}")));
+        .context("could not prepare the workspaces database")?;
 
     update_database_schema_if_necessary(&mut conn)
-        .unwrap_or_else(|e| fatal_db_error(&format!("could not migrate database: {e}")));
+        .context("could not update the workspaces database to the current schema")?;
 
     match args.command {
         cli::Command::Create {
@@ -388,16 +397,21 @@ fn update_database_schema_if_necessary(
     let db_path = Path::new(
         source_db_conn
             .path()
-            .expect("database should be file backed"),
+            .ok_or("the workspaces database is not backed by a file")?,
     );
 
-    let db_version: usize =
-        source_db_conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let db_version: usize = source_db_conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .context("could not read the schema version of the database")?;
 
-    assert!(
-        db_version <= NEWEST_DB_VERSION,
-        "database seems to be from a more current version of workspaces"
-    );
+    if db_version > NEWEST_DB_VERSION {
+        return Err(format!(
+            "the database is at schema version {db_version}, while this version of workspaces \
+             only knows versions up to {NEWEST_DB_VERSION}; it appears to have been created by \
+             a newer version of workspaces"
+        )
+        .into());
+    }
 
     if db_version == NEWEST_DB_VERSION {
         return Ok(());
@@ -406,20 +420,31 @@ fn update_database_schema_if_necessary(
     // Back up current database in case we need it for roll-backs later
     let backup_path = db_path.with_file_name(format!(
         "{}-{}.db.bak",
-        db_path.file_stem().unwrap().to_string_lossy(),
+        db_path
+            .file_stem()
+            .unwrap_or(OsStr::new("workspaces"))
+            .to_string_lossy(),
         Utc::now().format("%Y%m%dT%H%M%S")
     ));
 
-    let mut backup_dest_db = Connection::open(backup_path)?;
-    backup::Backup::new(source_db_conn, &mut backup_dest_db)?.run_to_completion(
-        4,
-        Duration::from_millis(250),
-        None,
-    )?;
+    let mut backup_dest_db = Connection::open(&backup_path).context(format!(
+        "could not create a backup of the database at {}",
+        backup_path.display()
+    ))?;
+    backup::Backup::new(source_db_conn, &mut backup_dest_db)
+        .context("could not start backing up the database")?
+        .run_to_completion(4, Duration::from_millis(250), None)
+        .context(format!(
+            "could not back up the database to {}",
+            backup_path.display()
+        ))?;
 
     // Iteratively apply necessary database updates
-    for update_proc in UPDATE_DB[db_version..].iter() {
-        update_proc(source_db_conn)?;
+    for (version, update_proc) in UPDATE_DB.iter().enumerate().skip(db_version) {
+        update_proc(source_db_conn).context(format!(
+            "could not update the database to schema version {}",
+            version + 1
+        ))?;
     }
 
     Ok(())

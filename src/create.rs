@@ -1,4 +1,4 @@
-use crate::{config, to_volume_string, zfs, ExitCodes};
+use crate::{config, errors, errors::Context, to_volume_string, zfs, ExitCodes};
 use chrono::{Duration, Utc};
 use rusqlite::Connection;
 use std::{
@@ -36,59 +36,107 @@ pub fn create(
         process::exit(ExitCodes::TooHighDuration as i32);
     }
 
-    conn.transaction().inspect(
-        |transaction| {
-            match transaction.execute(
-                "INSERT INTO workspaces(filesystem, user, name, expiration_time) \
-                    VALUES(?1, ?2, ?3, ?4)",
-                (filesystem_name, user, name, Utc::now() + *duration),
-            ) {
-                Ok(_) => {}
-                Err(rusqlite::Error::SqliteFailure(
-                    libsqlite3_sys::Error {
-                        code: libsqlite3_sys::ErrorCode::ConstraintViolation,
-                        ..
-                    },
-                    _,
-                )) => {
-                    eprintln!(
-                        "This workspace already exists. You can extend it using `workspaces extend`."
-                    );
-                    process::exit(ExitCodes::WorkspaceExists as i32);
-                }
-                Err(_) => unreachable!(),
-            };
+    let transaction = conn
+        .transaction()
+        .context("could not start a database transaction")?;
 
-            // Act like there was a notification sent just now
-            // so the user doesn't immediately get spammed with them
-            transaction.execute(
-                "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
-                (transaction.last_insert_rowid(), Utc::now()),
-            ).unwrap();
+    match transaction.execute(
+        "INSERT INTO workspaces(filesystem, user, name, expiration_time) \
+            VALUES(?1, ?2, ?3, ?4)",
+        (filesystem_name, user, name, Utc::now() + *duration),
+    ) {
+        Ok(_) => {}
+        Err(rusqlite::Error::SqliteFailure(
+            libsqlite3_sys::Error {
+                code: libsqlite3_sys::ErrorCode::ConstraintViolation,
+                ..
+            },
+            _,
+        )) => {
+            eprintln!(
+                "This workspace already exists. You can extend it using `workspaces extend`."
+            );
+            process::exit(ExitCodes::WorkspaceExists as i32);
         }
-    )?.commit()?;
+        Err(error) => {
+            return Err(errors::with_context(
+                "could not record the new workspace in the database",
+                error,
+            ));
+        }
+    };
+
+    // Act like there was a notification sent just now
+    // so the user doesn't immediately get spammed with them
+    transaction
+        .execute(
+            "INSERT INTO notifications(workspace_id, timestamp) VALUES (?1, ?2)",
+            (transaction.last_insert_rowid(), Utc::now()),
+        )
+        .context("could not record the new workspace's notification state in the database")?;
 
     let volume = to_volume_string(&filesystem.root, user, name);
 
-    zfs::create(&volume)?;
+    // Create the dataset while the transaction is still open: should this
+    // fail, e.g. because the pool is full, the transaction is rolled back
+    // instead of leaving behind a workspace which exists in the database but
+    // nowhere else (and which would then block creating it again).
+    zfs::create(&volume).context(format!("could not create the dataset {}", volume))?;
+
+    if let Err(error) = transaction.commit() {
+        eprintln!(
+            "Warning: the dataset {} was created, but could not be registered. \
+             Please ask your system administrator to remove it.",
+            volume
+        );
+        return Err(errors::with_context(
+            "could not record the new workspace in the database",
+            error,
+        ));
+    }
 
     // Explicitly request PathBuf so .display() works
-    let mountpoint: PathBuf = zfs::get_property::<PathBuf>(&volume, "mountpoint")?;
+    let mountpoint: PathBuf = zfs::get_property::<PathBuf>(&volume, "mountpoint")
+        .context(format!("could not find out where {} is mounted", volume))?;
 
-    let mut permissions = fs::metadata(&mountpoint)?.permissions();
+    let mut permissions = fs::metadata(&mountpoint)
+        .context(format!(
+            "could not read the permissions of {}",
+            mountpoint.display()
+        ))?
+        .permissions();
     permissions.set_mode(0o750);
-    fs::set_permissions(&mountpoint, permissions)?;
+    fs::set_permissions(&mountpoint, permissions).context(format!(
+        "could not set the permissions of {}",
+        mountpoint.display()
+    ))?;
 
     let status = Command::new("chown")
-        .args([&format!("{}:{}", user, user), &mountpoint.to_string_lossy().to_string()])
-        .status()?;
-    assert!(status.success(), "failed to change owner on dataset");
+        .args([
+            &format!("{}:{}", user, user),
+            &mountpoint.to_string_lossy().to_string(),
+        ])
+        .status()
+        .context("could not run `chown`")?;
+    if !status.success() {
+        return Err(errors::with_context(
+            format!(
+                "could not make {} the owner of {}",
+                user,
+                mountpoint.display()
+            ),
+            format!("`chown` exited with {}", status),
+        ));
+    }
 
     println!("Created workspace at {}", mountpoint.display());
 
     // Send "created" email (best-effort)
     if let Some(smtp_cfg) = smtp.as_ref() {
-        let host = hostname::get()?.to_string_lossy().to_string();
+        let host = hostname::get()
+            .context("could not determine this host's name")?
+            .to_string_lossy()
+            .to_string();
         let subject = format!("Workspace {} created on {}", name, host);
         let expiry_days = duration.num_days();
         let body = format!(
